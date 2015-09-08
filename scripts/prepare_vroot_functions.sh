@@ -27,7 +27,14 @@ HOMEDIR=`pwd`
 # FreeBSD version and architecture
 RELEASE=`uname -r|sed s/STABLE/RELEASE/`
 RELEASE_NUM=`echo $RELEASE | cut -d'.' -f1`
+RELEASE_VER=`echo $RELEASE | cut -d'.' -f2 | cut -d'-' -f1`
 ARCH=`uname -m`
+REPO=latest
+
+echo "10.2-RELEASE" | grep -q $RELEASE
+if [ $? -eq 0 ]; then
+    REPO="release_$RELEASE_VER"
+fi
 
 # unionfs settings
 PREPAREDIR="vroot_prepare"
@@ -56,12 +63,11 @@ PACKAGES_COMMON="netperf lsof elinks nmap lighttpd akpop3d links nano postfix \
 ##########################
 
 # package management
-DISTSERVER="ftp://ftp.at.freebsd.org"
+DISTSERVER="ftp://ftp.freebsd.org"
 RELEASE_DIR="/pub/FreeBSD/releases/$ARCH/$RELEASE"
 
 # pkg repository
-PKGREPO="http://pkg.freebsd.org/freebsd:$RELEASE_NUM:x86:32/latest/"
-REPOFILES="meta.txz packagesite.txz"
+PKGREPO="http://pkg.freebsd.org/freebsd:$RELEASE_NUM:x86:32/$REPO"
 export PKG_CACHEDIR=$WORKDIR/packages
 
 #export PACKAGESITE=$DISTSERVER/$RELEASE_DIR/packages/Latest/
@@ -69,7 +75,7 @@ export PKG_CACHEDIR=$WORKDIR/packages
 BASE_FILES="base"
 if [ "$ARCH" = "amd64" ]; then
     BASE_FILES="$BASE_FILES lib32"
-    PKGREPO="http://pkg.freebsd.org/freebsd:$RELEASE_NUM:x86:64/latest/"
+    PKGREPO="http://pkg.freebsd.org/freebsd:$RELEASE_NUM:x86:64/$REPO"
 fi
 
 ##########################
@@ -110,12 +116,6 @@ fetchBaseOnline () {
 	    $file | awk '{print $4}'`" ]; then
 	    log "ERR" "Checksum problem with $file.\nScript aborted."
 	    exit 1
-	fi
-    done
-
-    for file in $REPOFILES; do
-	if [ ! -f $file ]; then
-	    $FETCH_CMD $PKGREPO/$file
 	fi
     done
 }
@@ -172,10 +172,6 @@ it.\nScript aborted."
 	    exit 1
 	fi
     done
-
-    if [ $offline -eq 0 ]; then
-	cp /etc/resolv.conf $VROOT_MASTER/etc
-    fi
 }
 
 # prepare packages for pkg_add
@@ -232,24 +228,27 @@ be installed:\n $missing"
 be installed from the local repository imunes."
     fi
 
+    mkdir -p $VROOT_MASTER/usr/local/etc/pkg/repos/
+    echo "FreeBSD: { enabled: no }" > $VROOT_MASTER/usr/local/etc/pkg/repos/FreeBSD.conf
     if [ $offline -eq 1 ]; then
 	mkdir -p $VROOT_MASTER/$WORKDIR/packages
 
 	mount -t nullfs $WORKDIR $VROOT_MASTER/$WORKDIR
-	ln -s packages $VROOT_MASTER/$WORKDIR/All
-	ln -s packages $VROOT_MASTER/$WORKDIR/Latest
-	mkdir -p $VROOT_MASTER/usr/local/etc/pkg/repos/
-
-	pkg=`ls pkg*txz 2> /dev/null | head -n1`
-	if [ "$pkg" != "" ]; then
-	    ln -fs $pkg pkg.txz
-	fi
-
-	echo "FreeBSD: { enabled: no }" > $VROOT_MASTER/usr/local/etc/pkg/repos/FreeBSD.conf
 
 cat >> $VROOT_MASTER/usr/local/etc/pkg/repos/imunes.conf <<_EOF_
 imunes: {
-    url: "file:///tmp/vroot_prepare",
+    url: "file:///tmp/vroot_prepare/packages",
+    enabled: yes
+}
+_EOF_
+
+    else
+	if test -f /etc/resolv.conf; then
+	    cp /etc/resolv.conf $VROOT_MASTER/etc
+	fi
+	cat >> $VROOT_MASTER/usr/local/etc/pkg/repos/release.conf <<_EOF_
+release: {
+    url: "$PKGREPO",
     enabled: yes
 }
 _EOF_
@@ -295,15 +294,20 @@ installPackagesPkg () {
 
     err_list=""
     if [ $offline -eq 0 ]; then
-	pkg -c $VROOT_MASTER update -r FreeBSD >> $LOG 2>&1
+	pkg -c $VROOT_MASTER update -r release >> $LOG 2>&1
 	for pkg in ${PKGS}; do
-	    pkg -c $VROOT_MASTER install -fyUr FreeBSD $pkg >> $LOG 2>&1
+	    pkg -c $VROOT_MASTER install -fyUr release $pkg >> $LOG 2>&1
 	    if [ $? -ne 0 ]; then
 		err_list="$pkg $err_list"
 	    fi
 	done
 
-	cp $VROOT_MASTER/$WORKDIR/packages/* $WORKDIR/packages/
+	for file in `find $VROOT_MASTER/$WORKDIR/packages/ -maxdepth 1 -type l`; do
+	    unlink $file
+	done
+
+	cp -R $VROOT_MASTER/$WORKDIR/packages/* $WORKDIR/packages/
+	pkg repo $WORKDIR/packages/
     else
 	pkg -c $VROOT_MASTER update -r imunes >> $LOG 2>&1
 	for pkg in ${PKGS}; do
@@ -313,8 +317,6 @@ installPackagesPkg () {
 	    fi
 	done
 
-	unlink $VROOT_MASTER/$WORKDIR/All
-	unlink $VROOT_MASTER/$WORKDIR/Latest
 	umount $VROOT_MASTER/$WORKDIR
     fi
 

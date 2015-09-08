@@ -43,10 +43,6 @@
 #    When starting the program with defined filename, configuration for
 #    file "filename" is loaded to imunes.
 #****
-set baseTitle IMUNES
-set version "1.1"
-set date "2015-06-30"
-set additions ""
 
 package require cmdline
 package require ip
@@ -150,6 +146,7 @@ if { $ROOTDIR == "." } {
     set BINDIR "bin"
 }
 
+set baseTitle "IMUNES"
 set imunesVersion "Unknown"
 set imunesCommit ""
 set imunesChangedDate ""
@@ -167,6 +164,9 @@ foreach line [split $data "\n"] {
     if {[string match "Last changed:*" $line]} {
 	set imunesChangedDate [string range $line [expr [string first ":" $line] + 2] end]
     }
+    if {[string match "Additions:*" $line]} {
+	set imunesAdditions [string range $line [expr [string first ":" $line] + 2] end]
+    }
 }
 
 if { [string match "*Format*" $imunesCommit] } {
@@ -179,9 +179,12 @@ if { [string match "*Format*" $imunesCommit] } {
 }
 
 if { $params(v) || $params(version)} {
-    puts "IMUNES $imunesVersion $imunesAdditions"
+    puts "IMUNES $imunesVersion"
     if { $imunesChangedDate != "" } {
 	puts "$imunesChangedDate"
+    }
+    if { $imunesAdditions != "" } {
+	puts "Additions: $imunesAdditions"
     }
     exit
 }
@@ -190,7 +193,9 @@ set os [platform::identify]
 
 # Runtime libriaries
 foreach file [glob -directory $ROOTDIR/$LIBDIR/runtime *.tcl] {
-    source $file
+    if { [string match -nocase "*linux.tcl" $file] != 1 } {
+	source $file
+    }
 }
 
 # Set default L2 node list
@@ -241,11 +246,6 @@ foreach file $l3nodes {
 # additional nodes
 source "$ROOTDIR/$LIBDIR/nodes/localnodes.tcl"
 source "$ROOTDIR/$LIBDIR/nodes/annotations.tcl"
-
-if { $params(v) || $params(version)} {
-    puts "IMUNES version $version$additions ($date)"
-    exit
-}
 
 #
 # Global variables are initialized here
