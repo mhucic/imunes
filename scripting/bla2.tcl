@@ -18,7 +18,7 @@ set os [platform::identify]
 switch -glob -nocase $os {
     "*freebsd*" {
         set isOSfreebsd true
-	source "../untime/freebsd.tcl"
+	source "../runtime/freebsd.tcl"
     }
     "*linux*" {
         set isOSlinux true
@@ -137,7 +137,7 @@ proc createNode { type } {
     instNode $node
     startNode $node
 
-    return $node
+    return "Node $node created"
 }
 
 proc instNode { node } {
@@ -170,6 +170,8 @@ proc createLink { node_id1 node_id2} {
 		stopNode $node
 		startNode $node
 	}
+	
+	return "Link $link created"
 }
 
 proc startLink { link } {
@@ -177,8 +179,55 @@ proc startLink { link } {
 	set node_id2 [lindex [linkPeers $link] 1]
 	set ifname1 [ifcByPeer $node_id1 $node_id2]
 	set ifname2 [ifcByPeer $node_id2 $node_id1]
+	
 	createLinkBetween $node_id1 $node_id2 $ifname1 $ifname2
 	configureLinkBetween $node_id1 $node_id2 $ifname1 $ifname2 $link
+}
+
+
+
+
+proc deleteNode { node } {
+	foreach ifc [ifcList $node] {
+		set peer [peerByIfc $node $ifc]
+		set link [linkByPeers $node $peer]
+		deleteLink $link
+	}
+	
+	removeNode $node
+	
+}
+
+proc deleteLink { link } {
+	set pnodes [linkPeers $link]
+    foreach node $pnodes {
+		stopNode $node
+	}
+	removeLink $link
+	foreach node $pnodes {
+		startNode $node
+	}
+	return "Link $link removed"
+}
+
+
+proc saveConfiguration {} {
+	upvar 0 ::cf::[set ::curcfg]::eid eid
+	saveRunningConfigurationInteractive $eid
+}
+
+proc printNodeList {} {
+    upvar 0 ::cf::[set ::curcfg]::eid eid
+    upvar 0 ::cf::[set ::curcfg]::node_list node_list
+    upvar 0 ::cf::[set ::curcfg]::link_list link_list
+	
+	puts "eid: $eid"
+	puts "nodes: $node_list"
+	puts "links: "
+	foreach link $link_list {
+		puts "$link : [lindex [linkPeers $link] 0] - [lindex [linkPeers $link] 1]"
+	}
+	
 }
 
 proc startConfiguration {} {
@@ -206,21 +255,12 @@ proc startConfiguration {} {
 	}
 }
 
-
-proc printNodeList {} {
-    upvar 0 ::cf::[set ::curcfg]::eid eid
-    upvar 0 ::cf::[set ::curcfg]::node_list node_list
-    upvar 0 ::cf::[set ::curcfg]::link_list link_list
-	
-	puts $eid
-	puts $node_list
-	puts $link_list
-}
-
- 
-
 createContainer 
 createNode pc
 createNode pc
 createLink n0 n1
-
+createNode router
+createNode pc
+createLink n1 n2
+createLink n2 n3
+printNodeList
