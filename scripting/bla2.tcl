@@ -18,7 +18,7 @@ set os [platform::identify]
 switch -glob -nocase $os {
     "*freebsd*" {
         set isOSfreebsd true
-	source "../untime/freebsd.tcl"
+	source "../runtime/freebsd.tcl"
     }
     "*linux*" {
         set isOSlinux true
