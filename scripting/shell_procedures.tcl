@@ -130,6 +130,7 @@ proc createNode { type } {
     
     if {$type == "router"} {
 		setNodeModel $node quagga
+		setNodeProtocolRip $node 1
 	}
 		 
     
