@@ -2,13 +2,29 @@ package require tclreadline
 package require platform
 
 namespace eval tclreadline {
-
-proc prompt1 {} {
-	return "imunes@[info hostname]> "
-    }
-
-
+	# Prompt line prefix
+	proc prompt1 {} {
+		upvar 0 ::cf::[set ::curcfg]::eid eid
+		if {[info exists eid]} {
+			return "imunes@$eid> "
+		} else {
+			return "imunes@[info hostname]> "
+		}
+	}
 }
+
+# Read available commands for autocompletion
+set procedures ""
+set filep [open "shellcommands.txt" r]
+set commands [split [read $filep] "\n"]
+close $filep
+foreach command $commands {
+	set command [string trim $command]
+	if {[string length $command] > 0 } {
+			lappend procedures $command 
+	}
+}
+set procedures [lsort $procedures]
 
 #****f* tcl_shell.tcl/customcpl
 # NAME
@@ -22,14 +38,19 @@ proc prompt1 {} {
 #   * word -- string that needs to be autocompleted
 #	* start -- start position of word in line
 #	* end -- end position of word in line
-#	* line -- line
+#	* line -- line text
 # RESULT
 #	* Completed longest match of matched procedures and 
-#	list of matched procedures
+#	  list of matched procedures
 #****
 proc customcpl {word start end line} {
-	set procedures [lsort {createNode createLink createContainer startConfiguration saveConfiguration deleteLink deleteNode printNodeList setIPv4OnIfc demo1 clean}]
+	global procedures
 	set matched_procedures ""
+	
+	##if {$word == "" && $line == "attachToRunningExperiment "} {
+		##puts [getResumableExperiments]
+	##}
+	
 	foreach procedure $procedures {
 		if {[string first $word $procedure] == 0}  {
 			set matched_procedures "$matched_procedures $procedure"

@@ -1,3 +1,7 @@
+###
+# Initialization of variables
+###
+
 set isOSfreebsd false
 set isOSlinux false
 set isOSwin false
@@ -42,21 +46,20 @@ foreach f [list editor] {
     source "../gui/$f.tcl"
 }
 
+source  "../gui/canvas.tcl"
 # Set default L2 node list
-set l2nodes "hub lanswitch click_l2 rj45 stpswitch filter packgen nat64"
+set l2nodes "hub lanswitch click_l2 rj45 stpswitch filter packgen ext"
 # Set default L3 node list
-set l3nodes "genericrouter quagga xorp static click_l3 host pc"
-
+set l3nodes "genericrouter quagga xorp static click_l3 host pc nat64"
 # Set default supported router models
 set supp_router_models "xorp quagga static"
 
-if { [string match -nocase "*linux*" $os] == 1 } {
+if { $isOSlinux } {
     # Limit default nodes on linux
-    set l2nodes "lanswitch rj45"
-    set l3nodes "genericrouter quagga static pc host"
+    set l2nodes "lanswitch rj45 ext"
+    set l3nodes "genericrouter quagga static pc host nat64"
     set supp_router_models "quagga static"
-    }
-
+}
 
 # L2 nodes
 foreach file $l2nodes {
@@ -66,10 +69,6 @@ foreach file $l2nodes {
 foreach file $l3nodes {
     source "../nodes/$file.tcl"
 }
-
-#~ foreach f [list pc] {
-    #~ source "nodes/$f.tcl"
-#~ }
 
 set runtimeDir "/var/run/imunes"
 set execMode "batch"
@@ -97,83 +96,467 @@ set iconSize normal
 set defEthBandwidth 0
 set IPv4autoAssign 1
 set IPv6autoAssign 1
+set editor_only 0
 
-# router
+#Auto saving of configuration files when creating a new node
+set autoSaveOnChange 1
+
+# bases for naming new nodes
+array set nodeNamingBase {
+    pc pc
+    click_l2 cswitch
+    click_l3 crouter
+    ext ext
+    filter filter
+    router router
+    host host
+    hub hub
+    lanswitch switch
+    nat64 nat64-
+    packgen packgen
+    stpswitch stpswitch
+}
+
+
+# Default for router
+#TODO jos neki router
 set rdconfig ""
-set model quagga
-set router_model $model
-set routerDefaultsModel $model
+#set model quagga
+#set router_model $model
+#set routerDefaultsModel $model
 set def_router_model quagga
 
 
-# changeME
+#TODOchangeME
 set currentFileBatch remoteBla
 
 lappend cfg_list $curcfg
 namespace eval ::cf::[set curcfg] {}
 set eid_base i[format %04x [expr {[pid] + [expr { round( rand()*10000 ) }]}]]
 
+
+#****f* shell_procedures.tcl/createContainer
+# NAME
+#   createContainer
+# SYNOPSIS
+#   createContainer
+# FUNCTION
+#   Procedure creates new container for experiment
+#****
 proc createContainer {} {
-	global eid_base runtimeDir
+	global eid_base runtimeDir isOSfreebsd
     upvar 0 ::cf::[set ::curcfg]::eid eid
     set eid ${eid_base}[string range $::curcfg 1 end]
     loadKernelModules
 	prepareVirtualFS
 	prepareDevfs
 	createExperimentContainer
+	newCanvas c0
 	
 	file mkdir "$runtimeDir/$eid"
-}
-
-proc createNode { type } {
-    set node [newNode $type]
-    
-    if {$type == "router"} {
-		setNodeModel $node quagga
-		setNodeProtocolRip $node 1
+	if {$isOSfreebsd} {
+		upvar 0 ::cf::[set ::curcfg]::ngnodemap ngnodemap
+		set ngmapFile "$runtimeDir/$eid/ngnodemap"
+	    array set ngnodemap ""
+	    dumpNgnodesToFile $runtimeDir/$eid/ngnodemap 
 	}
-		 
-    
-    instNode $node
-    startNode $node
-
-    return "Node $node created"
+	
+	puts "Experiment container created with id: $eid"
 }
 
+#****f* shell_procedures.tcl/createNode
+# NAME
+#   createNode
+# SYNOPSIS
+#   createNode $type
+# FUNCTION
+#   Creates new node of given type
+# INPUTS
+#   * type -- node type
+# RESULT
+#   * node -- node id
+#****
+proc createNode { type } {
+	upvar 0 ::cf::[set ::curcfg]::eid eid
+	if {![info exists eid]} {
+			puts "Container for experiment doesn't exist. Please create one using:"
+			puts "> createContainer"
+			return
+	}
+	global l3nodes l2nodes isOSlinux isOSfreebsd supp_router_models
+	#Add router to l3nodes
+	set l3nodes_a "$l3nodes router"
+	if {[lsearch -exact $l2nodes $type]<0 && [lsearch -exact $l3nodes_a $type]<0} {
+		puts "Node not created. Wrong type of node. Use one of following: "
+		puts $l2nodes
+		puts $l3nodes_a
+		return
+	}
+	if {$type == "pseudo"}	{
+		puts "Can't create \"pseudo\" node"
+		return
+	}
+    set node [newNode $type]
+	
+	if {$type == "rj45"} {
+		puts "External interface requires appointed physical interface for bridging."
+		puts "Please choose number in front of physical interface:"
+		set i 0
+		set ifcs [getExtIfcs]
+		foreach ifc $ifcs {
+			puts "$i) $ifc"
+			incr i
+		}
+		set input [gets stdin]
+		if {$input>-1 && $input<$i} {
+			set name [lindex $ifcs $input]
+			if { $isOSlinux && [string length "$eid-$name.0"] > 15 } {
+				puts $eid-$name.0
+				puts "Bridge name too long, node not created, please choose another."
+				return
+			} else {
+				setNodeName $node $name
+			}
+		} else {
+			puts "Wrong choice, node not created, please try again."
+			removeNode $node
+			return
+		}
+		
+	} elseif {$type == "router"} {
+		puts "Choose router type:"
+		
+		#TODO genericrouter? ili ako direktno pozove
+		set i 0
+		foreach rtype $supp_router_models {
+			puts "$i) $rtype"
+			incr i
+		}
+		set input [gets stdin]
+		
+		#TODO Denis_provjera
+		if {$input>-1 && $input<$i} {
+			setNodeModel $node [lindex $router_models $input]
+		} else {
+			puts "Wrong choice, node not created, please try again."
+			removeNode $node
+			return
+		}
+		setNodeProtocolRip $node 1
+	} elseif {[lsearch -exact $supp_router_models $type]>=0} {
+		setNodeModel $node $type
+	}
+	
+		 
+    instNode $node
+    #startNode $node
+    runConfOnNode $node
+    
+    setNodeCanvas $node c0
+    set coords [getRandomCoords]
+    setNodeCoords $node $coords
+    setNodeLabelCoords $node "[lindex $coords 0] [expr {[lindex $coords 1] +30}]" 
+    
+    #if {$isOSfreebsd} {
+		#upvar 0 ::cf::[set ::curcfg]::ngnodemap ngnodemap
+		#set ngnodemap($eid\.$node) $node
+	#}
+    
+    global autoSaveOnChange
+    if {$autoSaveOnChange} {
+		saveConfiguration
+	}
+	
+	puts "Node $node created"
+}
+
+#****f* shell_procedures.tcl/instNode
+# NAME
+#   instNode
+# SYNOPSIS
+#   instNode $node
+# FUNCTION
+#   Procedure instantiate creates a new virtual node
+# INPUTS
+#   * node -- node id
+#****
 proc instNode { node } {
 	upvar 0 ::cf::[set ::curcfg]::eid eid
-
+	
 	pipesCreate
 	[typemodel $node].instantiate $eid $node
 	pipesClose
 }
 
+#****f* shell_procedures.tcl/startNode
+# NAME
+#   startNode
+# SYNOPSIS
+#   startNode $node
+# FUNCTION
+#   Procedure starts a new node
+# INPUTS
+#   * node -- node id
+#****
 proc startNode { node } {
 	upvar 0 ::cf::[set ::curcfg]::eid eid
-
-	[typemodel $node].start $eid $node
+	if {[info procs [typemodel $node].start] != ""} {
+		[typemodel $node].start $eid $node
+	}
 }
 
+#****f* shell_procedures.tcl/stopNode
+# NAME
+#   stopNode
+# SYNOPSIS
+#   stopNode $node
+# FUNCTION
+#   Procedure stops existing node
+# INPUTS
+#   * node -- node id
+#****
 proc stopNode { node } {
 	upvar 0 ::cf::[set ::curcfg]::eid eid
-	
-	[typemodel $node].shutdown $eid $node
+	if {[nodeType $node] == "pseudo"}	{
+		puts "Can't stop \"pseudo\" node"
+		return
+	}
+	if {[info procs [typemodel $node].shutdown] != ""} {
+		[typemodel $node].shutdown $eid $node
+	}
 }
 
+#****f* shell_procedures.tcl/createLink
+# NAME
+#   createLink -- create link between nodes
+# SYNOPSIS
+#   createLink $node1 $ifc1 $node2 $ifc2 
+# FUNCTION
+#   Procedure creates a new link between nodes node1 and node2
+# INPUTS
+#   * node1 -- node id
+#	* ifc1	-- interface on node1
+#   * node2 -- node id
+#	* ifc2	-- interface on node2
+# RESULTS
+#   * link -- link id
+#****
+proc createLink { node1 ifc1 node2 ifc2 } {
+    upvar 0 ::cf::[set ::curcfg]::node_list node_list
+    upvar 0 ::cf::[set ::curcfg]::eid eid
 
-proc createLink { node_id1 node_id2} {    
-    set link [newLink $node_id1 $node_id2]
+	
+	if {[nodeType $node1] == "pseudo" || [nodeType $node2] == "pseudo"}	{
+		puts "Can't create link to \"pseudo nodes\""
+		return
+	}
+	
+	if {[lsearch -exact $node_list $node1]<0} {
+		puts "Node $node1 doesn't exist. Choose another node."
+		return
+	} elseif {[lsearch -exact $node_list $node2]<0} {
+		puts "Node $node2 doesn't exist. Choose another node."
+		return
+	}
+	if {[lsearch -exact [ifcList $node1] $ifc1]<0} {
+		puts "Interface $ifc1 on $node1 doesn't exist. Please choose another or create one."
+		return
+	} elseif {[lsearch -exact [ifcList $node2] $ifc2]<0} {
+		puts "Interface $ifc2 on $node2 doesn't exist. Please choose another or create one."
+		return
+	}
+	    
+    #TODO provjera je li vec nesto spojeno na koji ifc?
+    global isOSfreebsd isOSlinux runtimeDir
+    if {$isOSfreebsd} {
+		upvar 0 ::cf::[set ::curcfg]::link_list link_list
+		upvar 0 ::cf::[set ::curcfg]::$node1 $node1
+		upvar 0 ::cf::[set ::curcfg]::$node2 $node2
+		global defEthBandwidth defSerBandwidth defSerDelay
+		
+		
+		#TODO obrisati?
+		foreach node "$node1 $node2" {
+		if {[info procs [nodeType $node].maxLinks] != "" } {
+			if { [ numOfLinks $node ] == [[nodeType $node].maxLinks] } {
+			puts "IMUNES warning" \
+			   "Warning: Maximum links connected to the node $node" \
+			return
+			}
+		}
+		}
+
+		set link [newObjectId link]
+		upvar 0 ::cf::[set ::curcfg]::$link $link
+		set $link {}
+
+		lappend $link "nodes {$node1 $node2}"
+		if { ([nodeType $node1] == "lanswitch" || \
+			[nodeType $node2] == "lanswitch" || \
+			[string first eth "$ifc1 $ifc2"] != -1) && \
+			[nodeType $node1] != "rj45" && \
+			[nodeType $node2] != "rj45" } {
+			lappend $link "bandwidth $defEthBandwidth"
+		} elseif { [string first ser "$ifc1 $ifc2"] != -1 } {
+			lappend $link "bandwidth $defSerBandwidth"
+			lappend $link "delay $defSerDelay"
+		}
+
+		lappend link_list $link
+		
+		set i [lsearch [set $node1] "interface-peer {$ifc1 $node1}"]
+		set $node1 [lreplace [set $node1] $i $i "interface-peer {$ifc1 $node2}"]
+		set i [lsearch [set $node2] "interface-peer {$ifc2 $node2}"]
+		set $node2 [lreplace [set $node2] $i $i "interface-peer {$ifc2 $node1}"]
+
+		if {[isNodeRouter $node1]} {
+			if {[info procs [nodeType $node1].confNewIfc] != ""} {
+				[nodeType $node1].confNewIfc $node1 $ifc1
+			}
+			if {[info procs [nodeType $node2].confNewIfc] != ""} {
+				[nodeType $node2].confNewIfc $node2 $ifc2
+			}
+		} else {
+			if {[info procs [nodeType $node2].confNewIfc] != ""} {
+				[nodeType $node2].confNewIfc $node2 $ifc2
+			}
+			if {[info procs [nodeType $node1].confNewIfc] != ""} {
+				[nodeType $node1].confNewIfc $node1 $ifc1
+			}
+		}
+	} elseif {$isOSlinux} {
+		set link [newLink $node1 $node2]
+	}
+    #startLink $link
     
+    createLinkBetween $node1 $node2 $ifc1 $ifc2
+	configureLinkBetween $node1 $node2 $ifc1 $ifc2 $link
+    
+    #TODO obrisati?
+    foreach node "$node1 $node2" {
+		#stopNode $node
+		startNode $node
+	}
+	
+	global autoSaveOnChange
+    if {$autoSaveOnChange} {
+		saveConfiguration
+	}
+	
+	puts "Link $link ([lindex [linkPeers $link] 0] - [lindex [linkPeers $link] 1]) created"
+}
+
+proc createNodeIfc { node } {
+	if {[nodeType $node] == "pseudo"}	{
+		puts "Can't create interface on \"pseudo node\""
+		return
+	}
+	
+	#TODO provjera koji ifc, ako je ext onda ide ext
+	
+	set type "eth"
+#TODO jel dobar node provjera za interface
+    upvar 0 ::cf::[set ::curcfg]::eid eid
+    upvar 0 ::cf::[set ::curcfg]::$node $node
+	global isOSfreebsd runtimeDir
+	set ifname [newIfc $type $node]
+    
+    #TODO  netconfInsertSection
+    
+    #DIPL objasniti da je tu opet node
+    
+    lappend $node "interface-peer {$ifname $node}"
+   	autoMACaddr $node $ifname
+
+	if {$isOSfreebsd} {
+		pipesCreate
+		createNodePhysIfcs $node
+		pipesClose
+		dumpNgnodesToFile $runtimeDir/$eid/ngnodemap 
+	}
+	
+	#if {[info procs [nodeType $node].confNewIfc] != ""} {
+		#[nodeType $node].confNewIfc $node $ifname
+	#}
+	#puts proslo2
+	
+	
+	#stopNode $node
+	#startNode $node
+	global autoSaveOnChange
+    if {$autoSaveOnChange} {
+		saveConfiguration
+	}
+	puts "Interface $ifname created on node $node"
+}
+
+#****f* shell_procedures.tcl/createLinkNewIfcs
+# NAME
+#   createLinkNewIfs -- create link between nodes and new network interfaces
+# SYNOPSIS
+#   createLink $node1 $node2
+# FUNCTION
+#   Procedure creates a new link between nodes node1 and node2 and new 
+#	interface on each node
+# INPUTS
+#   * node1 -- node id
+#   * node2 -- node id
+# RESULTS
+#   * link -- link id
+#****
+proc createLinkNewIfcs { node1 node2 } {
+    upvar 0 ::cf::[set ::curcfg]::node_list node_list
+    upvar 0 ::cf::[set ::curcfg]::eid eid
+
+	
+	if {[nodeType $node1] == "pseudo" || [nodeType $node2] == "pseudo"}	{
+		puts "Can't create link to \"pseudo nodes\""
+		return
+	}
+	
+	if {[lsearch -exact $node_list $node1]<0} {
+		puts "Node $node1 doesn't exist. Choose another node"
+		return
+	} elseif {[lsearch -exact $node_list $node2]<0} {
+		puts "Node $node2 doesn't exist. Choose another node"
+		return
+	}
+	
+	    
+    set link [newLink $node1 $node2]
+    global isOSfreebsd runtimeDir
+    if {$isOSfreebsd} {
+		pipesCreate
+		createNodePhysIfcs $node1
+		createNodePhysIfcs $node2
+		pipesClose
+		dumpNgnodesToFile $runtimeDir/$eid/ngnodemap 
+	}
     startLink $link
     
-    foreach node "$node_id1 $node_id2" {
+    foreach node "$node1 $node2" {
 		stopNode $node
 		startNode $node
 	}
 	
-	return "Link $link created"
+	global autoSaveOnChange
+    if {$autoSaveOnChange} {
+		saveConfiguration
+	}
+	
+	puts "Link $link ([lindex [linkPeers $link] 0] - [lindex [linkPeers $link] 1]) created"
 }
 
+#****f* shell_procedures.tcl/startLink
+# NAME
+#   startLink
+# SYNOPSIS
+#   startLink $link
+# FUNCTION
+#   Procedure configures and starts a new link
+# INPUTS
+#   * link -- link id
+#****
 proc startLink { link } {
 	set node_id1 [lindex [linkPeers $link] 0]
 	set node_id2 [lindex [linkPeers $link] 1]
@@ -184,20 +567,74 @@ proc startLink { link } {
 	configureLinkBetween $node_id1 $node_id2 $ifname1 $ifname2 $link
 }
 
-
-
-
+#****f* shell_procedures.tcl/deleteNode
+# NAME
+#   deleteNode
+# SYNOPSIS
+#   deleteNode $node
+# FUNCTION
+#   Procedure deletes existing node and links to this node
+# INPUTS
+#   * node -- node id
+#****
 proc deleteNode { node } {
-	foreach ifc [ifcList $node] {
-		set peer [peerByIfc $node $ifc]
-		set link [linkByPeers $node $peer]
-		deleteLink $link
+	upvar 0 ::cf::[set ::curcfg]::node_list node_list
+    upvar 0 ::cf::[set ::curcfg]::eid eid
+    upvar 0 ::cf::[set ::curcfg]::$node $node
+    global nodeNamingBase
+    
+    #TODO dal node postoji u node_list?
+    
+	if {[nodeType $node] == "pseudo"}	{
+		puts "Can't delete \"pseudo\" node"
+		return
 	}
 	
-	removeNode $node
+	if { [getCustomIcon $node] != "" } {
+		removeImageReference [getCustomIcon $node] $node
+    }
+	#problem ako je interface sam jer očekuje da ako ima interface da pokazuje na drugi čvor
+	foreach ifc [ifcList $node] {
+		#ako nije isti sebi
+		set peer [peerByIfc $node $ifc]
+		if {$peer != $node} {
+			set link [linkByPeers $node $peer]
+			deleteLink $link
+		}
+	}
 	
+	#removeNode $node
+	
+	stopNode $node
+	set i [lsearch -exact $node_list $node]
+    set node_list [lreplace $node_list $i $i]
+
+    set node_type [nodeType $node]
+    if { $node_type in [array names nodeNamingBase] } {
+		recalculateNumType $node_type $nodeNamingBase($node_type)
+    }
+	
+	global autoSaveOnChange
+    if {$autoSaveOnChange} {
+		saveConfiguration
+	}
+	pipesCreate
+	[typemodel $node].destroy $eid $node
+	pipesClose
+	puts "Node $node removed"
 }
 
+
+#****f* shell_procedures.tcl/deleteLinkIfcs
+# NAME
+#   deleteLinkIfcs -- delete link and interfaces on node
+# SYNOPSIS
+#   deleteLink $node
+# FUNCTION
+#   Procedure deletes link
+# INPUTS
+#   * link -- link id
+#****
 proc deleteLink { link } {
 	set pnodes [linkPeers $link]
     foreach node $pnodes {
@@ -207,29 +644,200 @@ proc deleteLink { link } {
 	foreach node $pnodes {
 		startNode $node
 	}
-	return "Link $link removed"
-}
-
-
-proc saveConfiguration {} {
-	upvar 0 ::cf::[set ::curcfg]::eid eid
-	saveRunningConfigurationInteractive $eid
-}
-
-proc printNodeList {} {
-    upvar 0 ::cf::[set ::curcfg]::eid eid
-    upvar 0 ::cf::[set ::curcfg]::node_list node_list
-    upvar 0 ::cf::[set ::curcfg]::link_list link_list
 	
-	puts "eid: $eid"
-	puts "nodes: $node_list"
-	puts "links: "
-	foreach link $link_list {
-		puts "$link : [lindex [linkPeers $link] 0] - [lindex [linkPeers $link] 1]"
+	global autoSaveOnChange
+    if {$autoSaveOnChange} {
+		saveConfiguration
 	}
 	
+	puts "Link $link ([lindex [linkPeers $link] 0] - [lindex [linkPeers $link] 1]) removed"
 }
 
+
+proc deleteNodeIfc {node ifcname} {
+	upvar 0 ::cf::[set ::curcfg]::$node $node
+	upvar 0 ::cf::[set ::curcfg]::node_list node_list
+    upvar 0 ::cf::[set ::curcfg]::ngnodemap ngnodemap
+    upvar 0 ::cf::[set ::curcfg]::eid eid
+    global isOSfreebsd
+	
+	if {[lsearch -exact $node_list $node]<0} {
+		puts "Node $node doesn't exist. Choose another node"
+		return
+	}
+	if {[lsearch -exact [ifcList $node] $ifcname]<0} {
+		puts "Interface $ifname doesnt exist on node $node"
+		if {[ifcList $node]!=""} {
+			puts "Available interfaces: [ifcList $node]"
+		}else{
+			puts "No available interface on node $node to delete"
+		}
+		return
+	}
+	if {$isOSfreebsd} {
+		pipesCreate
+		set ngnode $ngnodemap($ifcname@$eid.$node)
+		pipesExec "jexec $eid ngctl shutdown $ngnode:"
+		pipesClose
+	}
+	
+	unset ngnodemap($ifcname@$eid.$node)
+	
+	netconfClearSection $node "interface $ifcname"
+	
+	global autoSaveOnChange
+    if {$autoSaveOnChange} {
+		saveConfiguration
+	}
+	puts "Interface $ifcname deleted on node $node"
+
+}
+
+#****f* shell_procedures.tcl/deleteLink2
+# NAME
+#   deleteLink
+# SYNOPSIS
+#   deleteLink $node
+# FUNCTION
+#   Procedure deletes link
+# INPUTS
+#   * link -- link id
+#****
+proc deleteLink2 { link } {
+	upvar 0 ::cf::[set ::curcfg]::eid eid
+	upvar 0 ::cf::[set ::curcfg]::link_list link_list
+    upvar 0 ::cf::[set ::curcfg]::$link $link
+    upvar 0 ::cf::[set ::curcfg]::IPv4UsedList IPv4UsedList
+    upvar 0 ::cf::[set ::curcfg]::IPv6UsedList IPv6UsedList
+    upvar 0 ::cf::[set ::curcfg]::MACUsedList MACUsedList
+
+    set pnodes [linkPeers $link]
+    foreach node $pnodes {
+		upvar 0 ::cf::[set ::curcfg]::$node $node
+
+		set i [lsearch $pnodes $node]
+		set peer [lreplace $pnodes $i $i]
+		set ifc [ifcByPeer $node $peer]
+		set index [lsearch -exact $IPv4UsedList [getIfcIPv4addr $node $ifc]]
+		set IPv4UsedList [lreplace $IPv4UsedList $index $index]
+		set index [lsearch -exact $IPv6UsedList [getIfcIPv6addr $node $ifc]]
+		set IPv6UsedList [lreplace $IPv6UsedList $index $index]
+		set index [lsearch -exact $MACUsedList [getIfcMACaddr $node $ifc]]
+		set MACUsedList [lreplace $MACUsedList $index $index]
+		
+		
+		#iskoristi ovo
+			#removeNodeIfcIPaddrs $node 
+		set node_id "$eid.$node"
+		set ipv4 [getIfcIPv4addr $node $ifc]
+		set ipv6 [getIfcIPv6addr $node $ifc]
+		pipesCreate
+		pipesExec "exec jexec $node_id ifconfig $ifc $ipv4 -alias"
+		pipesExec "exec jexec $node_id ifconfig $ifc inet6 $ipv6 -alias"
+		pipesClose
+		
+		#tonetconfClearSection $node "interface $ifc"
+		
+		
+		#TODO ne izbriši interfaceList
+		
+		
+		set i [lsearch [set $node] "interface-peer {$ifc $peer}"]
+		set $node [lreplace [set $node] $i $i "interface-peer {$ifc $node"]
+		
+		if { [[typemodel $node].layer] == "NETWORK" } {
+			set ifcs [ifcList $node]
+			foreach iface $ifcs {
+			autoIPv4defaultroute $node $iface
+			}
+		}
+		
+		#DTODO denis što je ovo?
+		foreach lifc [logIfcList $node] {
+			switch -exact [getLogIfcType $node $lifc] {
+			vlan {
+				if {[getIfcVlanDev $node $lifc] == $ifc} {
+				netconfClearSection $node "interface $lifc"
+				}
+			}
+			}
+		}
+		}
+    set i [lsearch -exact $link_list $link]
+    set link_list [lreplace $link_list $i $i]
+    
+	
+	pipesCreate
+	destroyLinkBetween $eid [lindex [linkPeers $link] 0] [lindex [linkPeers $link] 1]
+	#destroyIfc
+	pipesClose
+	
+	global autoSaveOnChange
+    if {$autoSaveOnChange} {
+		saveConfiguration
+	}
+	
+	puts "Link $link ([lindex [linkPeers $link] 0] - [lindex [linkPeers $link] 1]) removed"
+}
+
+#****f* shell_procedures.tcl/saveConfiguration
+# NAME
+#   saveConfiguration
+# SYNOPSIS
+#   saveConfiguration
+# FUNCTION
+#   Procedure saves experiment configuration files to runtime directory
+#****
+proc saveConfiguration {} {
+	upvar 0 ::cf::[set ::curcfg]::eid eid
+	upvar 0 ::cf::[set ::curcfg]::ngnodemap ngnodemap
+    global runtimeDir
+	if {![info exists eid]} {
+			return "Container for experiment doesn't exist. Please create one"
+	}
+	saveRunningConfigurationInteractive $eid
+	writeDataToFile $runtimeDir/$eid/timestamp [clock format [clock seconds]]
+	dumpLinksToFile $runtimeDir/$eid/links
+	dumpNgnodesToFile $runtimeDir/$eid/ngnodemap
+	
+}
+
+#****f* shell_procedures.tcl/loadImnFile
+# NAME
+#   loadImnFile -- Load IMUNES .imn file
+# SYNOPSIS
+#   loadImnFile $sourceFile 
+# FUNCTION
+#   Loads previously saved .imn file and starts the experiment
+# INPUT
+#	* sourceFile -- path to location of file
+#****
+proc loadImnFile { sourceFile} {
+	set eid [createContainer]
+	set fileName [file tail $sourceFile]
+    set fileId [open $sourceFile r]
+    set cfg ""
+    foreach entry [read $fileId] {
+		lappend cfg $entry
+    }
+    close $fileId
+    
+	loadCfg $cfg
+	
+	global runtimeDir
+	startConfiguration
+	saveConfiguration
+	writeDataToFile $runtimeDir/$eid/name $fileName
+}
+
+#****f* shell_procedures.tcl/startConfiguration
+# NAME
+#   startConfiguration
+# SYNOPSIS
+#   startConfiguration 
+# FUNCTION
+#   Procedure creates nodes and links from loaded configuration
+#****
 proc startConfiguration {} {
 	upvar 0 ::cf::[set ::curcfg]::eid eid
     upvar 0 ::cf::[set ::curcfg]::node_list node_list
@@ -255,12 +863,282 @@ proc startConfiguration {} {
 	}
 }
 
-createContainer 
-createNode pc
-createNode pc
-createLink n0 n1
-createNode router
-createNode pc
-createLink n1 n2
-createLink n2 n3
-printNodeList
+#****f* shell_procedures.tcl/attachToRunningExperiment
+# NAME
+#   attachToRunningExperiment
+# SYNOPSIS
+#   attachToRunningExperiment $eid 
+# FUNCTION
+#   Attach to currently running experiment
+# INPUT
+#	* eidInput -- eid of running experiment
+#****
+proc attachToRunningExperiment { eidInput } {
+	global runtimeDir
+	upvar 0 ::cf::[set ::curcfg]::eid eid
+	set eid $eidInput
+	
+	set fileId [open $runtimeDir/$eid/config.imn r]
+    set cfg ""
+    foreach entry [read $fileId] {
+		lappend cfg $entry
+    }
+    close $fileId
+    
+	loadCfg $cfg
+}
+
+#****f* shell_procedures.tcl/printResumableExperiments
+# NAME
+#   printResumableExperiments
+# SYNOPSIS
+#   printResumableExperiments 
+# FUNCTION
+#   List resumable experiments
+#****
+proc printResumableExperiments {} {
+	set experiments [getResumableExperiments]
+	if {[llength $experiments] != 0} {
+		puts "Resumable experiments:"
+		puts "Experiment ID - name : Timestamp"
+		foreach exp $experiments {
+			puts "$exp - [getExperimentNameFromFile $exp] : [getExperimentTimestampFromFile $exp]"
+		}
+		puts "Use command \"attachToRunningExperiment experiment_id\" to attach to experiment."
+	} else {
+		puts "No resumable experiments"
+	}
+}
+
+#****f* shell_procedures.tcl/printNodeList
+# NAME
+#   printNodeList
+# SYNOPSIS
+#   printNodeList 
+# FUNCTION
+#   List node and link list of current eid
+#****
+proc printNodeList {} {
+    upvar 0 ::cf::[set ::curcfg]::eid eid
+    upvar 0 ::cf::[set ::curcfg]::node_list node_list
+    upvar 0 ::cf::[set ::curcfg]::link_list link_list
+	
+	puts "Experiment id: $eid"
+	puts "Nodes: id (hostname)"
+	foreach node $node_list {
+		if {[nodeType $node] == "pseudo"} {
+			puts "   $node (pseudo node)"
+		} else {
+			puts "   $node ([getNodeName $node])"	
+		}
+	}
+	if {[llength $link_list]>0} {
+		puts "Links: "
+		foreach link $link_list {
+			set linkpeer1 [lindex [linkPeers $link] 0]
+			set linkpeer2 [lindex [linkPeers $link] 1]
+			set nodeName1 [getNodeName $linkpeer1]
+			set nodeName2 [getNodeName $linkpeer2]
+			if {[nodeType $linkpeer1] == "pseudo"} {
+				puts "   $link : $linkpeer2 ($nodeName2) - $linkpeer1 (pseudo node): mirror [getLinkMirror $link]"
+			} elseif {[nodeType $linkpeer2] == "pseudo"} {
+				puts "   $link : $linkpeer1 ($nodeName1) - $linkpeer2 (pseudo node): mirror [getLinkMirror $link]"
+			} else {
+				puts "   $link : $linkpeer1 ($nodeName1) - $linkpeer2 ($nodeName2)"
+			}
+		}
+	}
+}
+
+#TODO
+proc changeNodeName { node } {
+	upvar 0 ::cf::[set ::curcfg]::node_list node_list
+	if {[lsearch -exact $node_list $node]<0} {
+		puts "Node $node1 doesn't exist. Choose another node"
+		return
+	}
+	
+}
+
+
+	#TODO} elseif {regex za IP dal je obavezan subnet?}
+	# ovisno o sustavu Linux ili freeBSD
+	# setIfcIPv4addr (start/stop)
+proc setIPv4OnIfc { node ifc ip } {
+	upvar 0 ::cf::[set ::curcfg]::eid eid
+	upvar 0 ::cf::[set ::curcfg]::node_list node_list
+	global isOSfreebsd isOSlinux
+	if {[lsearch -exact $node_list $node] < 0} {
+		puts "Node not found, choose node: "
+		puts $node_list	
+	} elseif {[lsearch -exact [ifcList $node] $ifc] < 0} {
+		puts "Interface $ifc on node $node not found."
+		if {[llength [ifcList $node]] > 0} {
+			puts "Availabe interfaces: [ifcList $node]"
+		} else {
+			puts "No interfaces on node $node"
+		}
+	} elseif {! [regexp "^((\[0-9]|\[1-9]\[0-9]|1\[0-9]{2}|2\[0-4]\[0-9]|25\[0-5])\.){3}(\[0-9]|\[1-9]\[0-9]|1\[0-9]{2}|2\[0-4]\[0-9]|25\[0-5])(\/(\[0-9]|\[0-2]\[0-9]|3\[0-2]))?\$" $ip]} {
+		puts "Wrong format of IP address"
+	}
+	
+	else {
+		if {isOSfreebsd} {
+			exec "jexec $eid.$node ifconfig $ifc $ip"
+		}
+		elseif {isOSlinux} {
+			
+		}
+		setIfcIPv4addrs $node $ifc $addr
+	}
+}
+
+
+#****f* shell_procedures.tcl/clean
+# NAME
+#   clean experiment files
+# SYNOPSIS
+#   clean 
+# FUNCTION
+#   Procedure terminates all nodes and deletes experiment files
+#****
+proc clean {} {
+	upvar 0 ::cf::[set ::curcfg]::eid eid
+	terminateAllNodes $eid
+	deleteExperimentFiles $eid
+}
+
+#****f* shell_procedures.tcl/getRandomCoords
+# NAME
+#   getRandomCoordinates
+# SYNOPSIS
+#   getRandomCoords 
+# FUNCTION
+#   Procedure returns random coordinates within canvas size
+# RESULT
+#   * X and Y coordinates
+#****
+proc getRandomCoords {} {
+	
+	set canvasSize [getCanvasSize "c0"]
+	set maxX [expr {[lindex $canvasSize 0] -40}]
+	set maxY [expr {[lindex $canvasSize 1] -50}]
+	
+	set coordx [expr {20 + round(rand()*$maxX)}]
+	set coordy [expr {20 + round(rand()*$maxY)}]
+	
+	return "$coordx $coordy"
+}
+
+
+#****f* shell_procedures.tcl/saveImnFile
+# NAME
+#   saveImnFile -- save current configuration to .imn file
+# SYNOPSIS
+#   saveImnFile $destination 
+# FUNCTION
+#   Saves current configuration to IMUNES .imn file
+#****
+#TODO check for imn extension
+proc saveImnFile {destination} {
+	set fileName $destination
+    set fileId [open $fileName w]
+    dumpCfg file $fileId
+    close $fileId
+}
+
+#****f* shell_procedures.tcl/setautoSaveOnChange
+# NAME
+#   setautoSaveOnChange -- set value variable autoSaveOnChange
+# SYNOPSIS
+#   setautoSaveOnChange $status 
+# FUNCTION
+#   Procedure sets value of variable setautoSaveOnChange to 0 or 1
+#****
+proc setautoSaveOnChange { status } {
+	global autoSaveOnChange
+	if { $status==1 || $status==0} {
+		set autoSaveOnChange $status
+		puts "autoSaveOnChange set to $status"
+	} else {
+		puts "Wrong argument. Acceptable 0 or 1"
+	}
+}
+
+#****f* shell_procedures.tcl/getautoSaveOnChange
+# NAME
+#   getautoSaveOnChange -- get value of variable autoSaveOnChange
+# SYNOPSIS
+#   getautoSaveOnChange 
+# FUNCTION
+#   Procedure returns value of variable autoSaveOnChange
+#****
+proc getautoSaveOnChange { } {
+	global autoSaveOnChange
+	puts "Automatic saving when change occurs is set to $autoSaveOnChange"
+}
+
+
+#Prints available commands
+proc help {} {
+	global procedures
+	puts "Available commands:"
+	foreach procedure $procedures {
+		puts "   $procedure"
+	}
+}
+
+
+
+#obsolete
+proc saveConfigImn {} {
+	upvar 0 ::cf::[set ::curcfg]::eid eid
+	upvar 0 ::cf::[set ::curcfg]::ngnodemap ngnodemap
+    global runtimeDir
+	
+	writeDataToFile $runtimeDir/$eid/timestamp [clock format [clock seconds]]
+	
+	dumpNgnodesToFile $runtimeDir/$eid/ngnodemap
+	##set ngmapFile "$runtimeDir/$eid/ngnodemap"
+	##set fileId [open $ngmapFile r]
+	##array set ngnodemap [gets $fileId]
+	##close $fileId
+	
+    set fileName "$runtimeDir/$eid/config.imn"
+    set fileId [open $fileName w]
+    dumpCfg file $fileId
+    close $fileId
+    #dumpcfg ili sve ispocetka? iskoritisti ono, ima neke graficke koje nemam
+}
+
+proc demo1 {} {
+	createContainer
+	createNode pc
+	
+	createNode pc
+	#createLink n0 n1
+	createNodeIfc n0
+	createNodeIfc n1
+	createLink n0 eth0 n1 eth0
+}
+
+#createContainer 
+#createNode pc
+#createNode pc
+#createLink n0 n1
+#createNode router
+#createNode pc
+#createLink n1 n2
+#createLink n2 n3
+#printNodeList
+
+
+
+proc upv {varname} {
+	upvar 0 ::cf::[set ::curcfg]::$varname $varname
+	if {$varname == ngnodemap} {
+		parray ngnodemap
+	} else {
+		puts $varname
+	}
+}
