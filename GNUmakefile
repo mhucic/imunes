@@ -7,6 +7,7 @@ ICONSDIR = $(IMUNESDIR)/icons
 NODESDIR = $(IMUNESDIR)/nodes
 RUNTIMEDIR = $(IMUNESDIR)/runtime
 SCRIPTSDIR = $(IMUNESDIR)/scripts
+PATCHESDIR = $(IMUNESDIR)/src/patches
 NORMAL_ICONSDIR = $(ICONSDIR)/normal
 SMALL_ICONSDIR = $(ICONSDIR)/small
 TINY_ICONSDIR = $(ICONSDIR)/tiny
@@ -17,12 +18,15 @@ TARBALL_DIR = imunes_$(IMUNESDATE)
 RELEASE_DIR = imunes-$(IMUNESVER)
 UNAME_S = $(shell uname -s)
 VROOT_EXISTS = $(shell [ -d /var/imunes/vroot ] && echo 1 || echo 0 )
+SERVICEDIR=/usr/local/etc/rc.d
+STARTUPDIR=/var/imunes-service
 
 BASEFILES =	COPYRIGHT README VERSION
 CONFIGFILES =	$(wildcard config/*.tcl)
 GUIFILES =	$(wildcard gui/*.tcl)
 NODESFILES =	$(wildcard nodes/*.tcl)
 RUNTIMEFILES =	$(wildcard runtime/*.tcl)
+PATCHESFILES =	$(wildcard src/patches/*)
 
 VROOT =	$(wildcard scripts/*.sh)
 TOOLS =	$(filter-out $(VROOT), $(wildcard scripts/*))
@@ -51,7 +55,7 @@ all: install
 install: uninstall netgraph
 	mkdir -p $(IMUNESDIR)
 	cp $(BASEFILES) $(IMUNESDIR)
-	sh scripts/update_version.sh
+	ROOTDIR=$(PREFIX) sh scripts/update_version.sh
 	mkdir -p $(BINDIR)
 
 	sed -e "s,set LIBDIR \"\",set LIBDIR $(LIBDIR)," \
@@ -75,8 +79,9 @@ ifeq ($(UNAME_S), Linux)
 	mv $(BINDIR)/himage.linux $(BINDIR)/himage
 	mv $(BINDIR)/cleanupAll.linux $(BINDIR)/cleanupAll
 	mv $(BINDIR)/startxcmd.linux $(BINDIR)/startxcmd
+	rm $(BINDIR)/pkg_add_imunes $(BINDIR)/pkg_imunes
 else
-	rm $(BINDIR)/himage.linux $(BINDIR)/cleanupAll.linux $(BINDIR)/startxcmd.linux
+	rm $(BINDIR)/himage.linux $(BINDIR)/cleanupAll.linux $(BINDIR)/startxcmd.linux $(BINDIR)/hcp.linux $(BINDIR)/apt-get_imunes
 endif
 
 	mkdir -p $(SCRIPTSDIR)
@@ -99,6 +104,9 @@ endif
 
 	mkdir -p $(RUNTIMEDIR)
 	cp $(RUNTIMEFILES) $(RUNTIMEDIR)
+
+	mkdir -p $(PATCHESDIR)
+	cp $(PATCHESFILES) $(PATCHESDIR)
 
 	mkdir -p $(ICONSDIR)
 	for file in $(ICONS); do \
@@ -125,6 +133,8 @@ uninstall:
 	for file in imunes $(notdir $(TOOLS)); do \
 		rm -f $(BINDIR)/$${file}; \
 	done ;
+	rm -rf $(SERVICEDIR)/imunes-service.sh
+	@echo 	"To remove startup topologies, remove $(STARTUPDIR)"
 
 netgraph:
 ifeq ($(UNAME_S), FreeBSD)
@@ -157,6 +167,25 @@ ifeq ($(VROOT_EXISTS), 1)
 else
 	@echo   "/var/imunes/vroot does not exist, exiting..."
 endif
+
+service:
+ifeq ($(UNAME_S), FreeBSD)
+	cp scripts/imunes-service.sh $(SERVICEDIR)
+	chmod 755 $(SERVICEDIR)/imunes-service.sh
+	mkdir -p $(STARTUPDIR)
+	@echo	""
+	@echo   "Created directory $(STARTUPDIR)"
+	@echo   "To start the experiment on boot, copy a topology to this folder."
+endif
+
+noservice:
+ifeq ($(UNAME_S), FreeBSD)
+	rm -rf $(SERVICEDIR)/imunes-service.sh
+	@echo	""
+	@echo   "Removed $(SERVICEDIR)/imunes-service.sh"
+	@echo 	"To remove startup topologies, remove $(STARTUPDIR)"
+endif
+
 
 tarball:
 	rm -f ../$(TARBALL_DIR).tar.gz

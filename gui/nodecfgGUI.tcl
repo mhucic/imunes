@@ -24,13 +24,14 @@
 #
 
 global old_conn_name bridgeProtocol brguielements selectedFilterRule \
-    selectedPackgenPacket
+    selectedPackgenPacket router_ConfigModel
 
 set old_conn_name ""
 set bridgeProtocol rstp
 set brguielements {}
 set selectedFilterRule ""
 set selectedPackgenPacket ""
+set router_ConfigModel "quagga"
 
 #****f* nodecfgGUI.tcl/nodeConfigGUI
 # NAME
@@ -922,6 +923,8 @@ proc configGUI_applyButtonNode { wi node phase } {
 	    }
 	} elseif { $guielement == "configGUI_nat64Config" } {
             $guielement\Apply [lindex [$wi.nbook tabs] 2] $node
+	} elseif { $guielement == "configGUI_ipsec" } {
+            $guielement\Apply [lindex [$wi.nbook tabs] 2] $node
         } else {  
 	    $guielement\Apply [lindex [$wi.nbook tabs] 0] $node
 	}
@@ -1137,6 +1140,7 @@ proc configGUI_ifcIPv4Address { wi node ifc } {
     foreach addr [getIfcIPv4addrs $node $ifc] {
 	append addrs "$addr" "; "
     }
+    set addrs [string trim $addrs "; "]
     $wi.if$ifc.ipv4.addr insert 0 $addrs
     $wi.if$ifc.ipv4.addr configure -validatecommand {checkIPv4Nets %P}
     pack $wi.if$ifc.ipv4.txt $wi.if$ifc.ipv4.addr -side left
@@ -1166,6 +1170,7 @@ proc configGUI_ifcIPv6Address { wi node ifc } {
     foreach addr [getIfcIPv6addrs $node $ifc] {
 	append addrs "$addr" "; "
     }
+    set addrs [string trim $addrs "; "]
     $wi.if$ifc.ipv6.addr insert 0 $addrs
     $wi.if$ifc.ipv6.addr configure -validatecommand {checkIPv6Nets %P}
     pack $wi.if$ifc.ipv6.txt $wi.if$ifc.ipv6.addr -side left
@@ -1464,7 +1469,7 @@ proc configGUI_routingModel { wi node } {
 	 $w.protocols.ripng configure -state disabled;
 	 $w.protocols.ospf configure -state disabled;
 	 $w.protocols.ospf6 configure -state disabled"
-	
+
     set router_ConfigModel [getNodeModel $node]
     if { $router_ConfigModel != "static" } {
         set ripEnable [getNodeProtocolRip $node]
@@ -1556,13 +1561,15 @@ proc configGUI_servicesConfig { wi node } {
 #   * node -- node id
 #****
 proc configGUI_attachDockerToExt { wi node } {
-    upvar 0 ::cf::[set ::curcfg]::oper_mode oper_mode
-    global guielements docker_enable isOSlinux
-    lappend guielements configGUI_attachDockerToExt
+    global isOSlinux
 
     if { !$isOSlinux } {
 	return
     }
+
+    upvar 0 ::cf::[set ::curcfg]::oper_mode oper_mode
+    global guielements docker_enable
+    lappend guielements configGUI_attachDockerToExt
 
     set docker_enable [string map {true 1 false 0} [getNodeDockerAttach $node]]
 
@@ -1771,12 +1778,16 @@ proc configGUI_externalIfcs { wi node } {
 #   * node -- node id
 #****
 proc configGUI_nodeNameApply { wi node } {
-    global changed badentry showTree
+    global changed badentry showTree eid_base isOSlinux
     
     set name [string trim [$wi.name.nodename get]]
-    if { [regexp {^[0-9A-Za-z][0-9A-Za-z-]*$} $name ] == 0 } {
+    if { [regexp {^[A-Za-z_][0-9A-Za-z_-]*$} $name ] == 0 } {
 	tk_dialog .dialog1 "IMUNES warning" \
-	    "Hostname should contain only letters, digits, and -, and should not start with - (hyphen)." \
+	    "Hostname should contain only letters, digits, _, and -, and should not start with - (hyphen) or number." \
+	    info 0 Dismiss
+    } elseif { $isOSlinux && [nodeType $node] == "rj45" && [string length "$eid_base-$name.0"] > 15 } {
+	tk_dialog .dialog1 "IMUNES warning" \
+	    "Brigde name too long." \
 	    info 0 Dismiss
     } elseif {$name != [getNodeName $node]} {
         setNodeName $node $name
@@ -2308,12 +2319,26 @@ proc configGUI_routingModelApply { wi node } {
     global router_ConfigModel
     global ripEnable ripngEnable ospfEnable ospf6Enable
     if { $oper_mode == "edit"} {
-        setNodeModel $node $router_ConfigModel	    
+	if { [nodeType $node] != "nat64" } {
+	    setNodeModel $node $router_ConfigModel
+	}
 	if { $router_ConfigModel != "static" } {
 	    setNodeProtocolRip $node $ripEnable
 	    setNodeProtocolRipng $node $ripngEnable
 	    setNodeProtocolOspfv2 $node $ospfEnable
 	    setNodeProtocolOspfv3 $node $ospf6Enable
+	    if { [nodeType $node] == "nat64" } {
+		foreach proto { rip ripng ospf ospf6 bgp } {
+		    set protocfg [netconfFetchSection $node "router $proto"]
+		    if { $protocfg != "" } {
+			set protocfg [linsert $protocfg 0 "router $proto"]
+			set protocfg [linsert $protocfg end "!"]
+			set protocfg [linsert $protocfg [lsearch $protocfg " network *"] " redistribute kernel" ]
+			netconfClearSection $node "router $proto"
+			netconfInsertSection $node $protocfg
+		    }
+		}
+	    }
 	} else {
 	    $wi.routing.protocols.rip configure -state disabled
 	    $wi.routing.protocols.ripng configure -state disabled
@@ -2631,8 +2656,14 @@ proc createTab { node cfgID } {
     $w.confid_e insert 0 $cfgID
     $w.bootcmd_e insert 0 [getCustomConfigCommand $node $cfgID]
     set config [getCustomConfig $node $cfgID]
+    set x 0
+    set numOfLines [llength $config]
     foreach data $config {
-	$w.editor insert end "$data\n"
+	incr x
+	$w.editor insert end "$data"
+	if { $x != $numOfLines } {
+	    $w.editor insert end "\n"
+	}
     }
     
     grid $w.confid_l -row 0 -column 0 -in $w -sticky w -pady 3
@@ -2788,6 +2819,25 @@ proc formatIPaddrList { addrList } {
     return $newList
 }
 
+proc setIPsecLogging { node tab } {
+    global ipsec_logging_on
+
+    if { $ipsec_logging_on } {
+	grid $tab.check_button -column 0 -row 3 -sticky ws -pady {0 0}
+	grid $tab.logLevelLabel -column 1 -row 3 -columnspan 1 -sticky es
+	grid $tab.logLevel -column 2 -row 3 -columnspan 3 -sticky es
+	set ipsec_logging [getNodeIPsecItem $node "ipsec-logging"]
+	if { $ipsec_logging == "" } {
+	    set ipsec_logging 1
+	}
+	$tab.logLevel set $ipsec_logging
+    } else {
+	grid $tab.check_button -column 0 -row 3 -sticky ws -pady {4 0}
+	grid remove $tab.logLevelLabel
+	grid remove $tab.logLevel
+    }
+}
+
 #################
 #****f* nodecfgGUI.tcl/configGUI_ipsec
 # NAME
@@ -2801,14 +2851,36 @@ proc formatIPaddrList { addrList } {
 #   * node -- node id
 #****
 proc configGUI_ipsec { tab node } {
+    global guielements ipsec_logging_on
+
+    lappend guielements configGUI_ipsec
+    set ipsec_logging [getNodeIPsecItem $node "ipsec-logging"]
+
+    if { $ipsec_logging == "" } {
+	set ipsec_logging_on 0
+    } else {
+	set ipsec_logging_on 1
+    }
+
     $tab configure -padding "5 5 5 5"
 
     ttk::label $tab.headingLabel -text "List of IPsec connections"
     ttk::treeview $tab.tree -columns "Peers_IP_address" -yscrollcommand "$tab.scrollbar set"
     ttk::scrollbar $tab.scrollbar -command "$tab.tree yview" -orient vertical
-    grid $tab.headingLabel -column 0 -row 0 -padx 5 -pady 5
-    grid $tab.tree -column 0 -row 1 -rowspan 2
-    grid $tab.scrollbar -column 1 -row 1 -rowspan 2 -sticky ns
+    ttk::checkbutton $tab.check_button -text "Enable logging" -variable ipsec_logging_on \
+	-onvalue 1 -offvalue 0 -command "setIPsecLogging $node $tab"
+    ttk::label $tab.logLevelLabel -text "Logging level:" -padding {0 1}
+
+    ttk::spinbox $tab.logLevel -width 5 \
+	-validate focus -invalidcommand "focusAndFlash %W"
+    $tab.logLevel configure \
+	-from -1 -to 4 -increment 1 \
+	-validatecommand {checkIntRange %P -1 4}
+    grid $tab.headingLabel -column 0 -row 0 -padx 5 -pady 5 -columnspan 4
+    grid $tab.tree -column 0 -row 1 -rowspan 2 -columnspan 3
+    grid $tab.scrollbar -column 4 -row 1 -rowspan 2 -sticky ns
+    setIPsecLogging $node $tab
+
     $tab.tree heading #0 -text "Connection name"
     $tab.tree column #0 -anchor center -width 195
     $tab.tree heading Peers_IP_address -text "Peers IP address"
@@ -2821,10 +2893,22 @@ proc configGUI_ipsec { tab node } {
     ttk::button $tab.button_container.add_button -text "Add" -command "addIPsecConnWindow $node $tab"
     ttk::button $tab.button_container.modify_button -text "Modify" -command "modIPsecConnWindow $node $tab"
     ttk::button $tab.button_container.delete_button -text "Delete" -command "deleteIPsecConnection $node $tab "
-    grid $tab.button_container -column 2 -row 1 -rowspan 2 -padx {8 0}
+    grid $tab.button_container -column 5 -row 1 -rowspan 2 -padx {8 0}
     grid $tab.button_container.add_button -column 0 -row 0 -pady 5 -padx 5
     grid $tab.button_container.modify_button -column 0 -row 1 -pady 5 -padx 5
     grid $tab.button_container.delete_button -column 0 -row 2 -pady 5 -padx 5
+}
+
+proc configGUI_ipsecApply { wi node } {
+    global ipsec_logging_on
+
+    if { $ipsec_logging_on } {
+	setNodeIPsecItem $node "ipsec-logging" [lindex [$wi.logLevel get] 0]
+    } else {
+	if { [getNodeIPsecItem $node "ipsec-logging"] != "" } {
+	    delNodeIPsecItem $node "ipsec-logging"
+	}
+    }
 }
 
 proc addIPsecConnWindow { node tab } {
@@ -2852,12 +2936,16 @@ proc modIPsecConnWindow { node tab } {
 }
 
 proc deleteIPsecConnection { node tab } {
-    global $tab.tree
+    global $tab.tree ipsec_enable
     set connection_name [$tab.tree focus]
 
     delNodeIPsecElement $node "configuration" "conn $connection_name"
 
     refreshIPsecTree $node $tab
+
+    if { [$tab.tree children {}] == "" } {
+	set ipsec_enable 0
+    }
 }
 
 #****f* nodecfgGUI.tcl/putIPsecConnectionInTree
@@ -2878,7 +2966,7 @@ proc putIPsecConnectionInTree { node tab indicator } {
     global peers_subnet local_cert_file type method esp_suits authby psk_key
     global ah_suits modp_suits connection_name local_name local_ip_address local_subnet
     global tree_widget conn_time keying_time how_long_time
-    global no_encryption secret_file old_conn_name
+    global no_encryption secret_file old_conn_name ipsec_enable
 
     set cert_exists 0
 
@@ -2926,10 +3014,12 @@ proc putIPsecConnectionInTree { node tab indicator } {
 	}
     }
 
-    set check [checkIfPeerStartsSameConnection $peers_node $trimmed_ip $local_subnet $local_name]
-    if { $check == 1 && $start_connection == 1 } {
-	tk_messageBox -message "Peer is configured to start the same connection!" -title "Error" -icon error -type ok
-	return
+    if { $peers_name != "%any"} {
+	set check [checkIfPeerStartsSameConnection $peers_node $trimmed_ip $local_subnet $local_name]
+	if { $check == 1 && $start_connection == 1 } {
+	    tk_messageBox -message "Peer is configured to start the same connection!" -title "Error" -icon error -type ok
+	    return
+	}
     }
 
     set cfg [getNodeIPsec $node]
@@ -3126,6 +3216,9 @@ proc putIPsecConnectionInTree { node tab indicator } {
     }
 
     if { $indicator == "add"} {
+	if { [$tab.tree children {}] == "" } {
+	    set ipsec_enable 1
+	}
         $tab.tree insert {} end -id $connection_name -text "$connection_name"
         $tab.tree set $connection_name Peers_IP_address "$real_ip_peer"
     } else {
@@ -3152,8 +3245,9 @@ proc refreshIPsecTree { node tab } {
     foreach item [ getNodeIPsecConnList $node ] {
 	set peerIp [ getNodeIPsecSetting $node "configuration" "conn $item" "right" ]
 	if { $peerIp != "" } {
-	    $tab.tree insert {} end -id $item -text "$item"
+	    $tab.tree insert {} end -id $item -text "$item" -tags "$item"
 	    $tab.tree set $item Peers_IP_address "$peerIp"
+	    $tab.tree tag bind $item <Double-1> "modIPsecConnWindow $node $tab"
 	}
     }
 }
@@ -3161,7 +3255,7 @@ proc refreshIPsecTree { node tab } {
 proc createIPsecGUI { node mainFrame connParamsLframe espOptionsLframe ikeSALframe indicator } {
     tk::toplevel .d
     wm title .d "$indicator IPsec connection"
-    grab .d
+    after 100 "grab .d"
 
     ttk::frame $mainFrame -padding 4
     grid $mainFrame -column 0 -row 0 -sticky nwes
@@ -3181,7 +3275,7 @@ proc createIPsecGUI { node mainFrame connParamsLframe espOptionsLframe ikeSALfra
     ttk::labelframe $connParamsLframe -text "Connection parameters"
     grid $connParamsLframe -column 0 -row 1 -sticky n -padx 5 -pady 5
 
-    ttk::frame $connParamsLframe.authby_container
+    ttk::frame $connParamsLframe.authby_container -padding {95 0}
     ttk::label $connParamsLframe.authby_container.authby_type -text "Authentication type:"
     ttk::radiobutton $connParamsLframe.authby_container.cert -text "Certificates" -variable authby -value cert \
 	-command "showCertificates $connParamsLframe"
@@ -3215,15 +3309,21 @@ proc createIPsecGUI { node mainFrame connParamsLframe espOptionsLframe ikeSALfra
 
     ttk::label $connParamsLframe.peer_ip -text "Peers IP address:"
     ttk::combobox $connParamsLframe.peer_name_entry -width 14 -textvariable peers_name -state readonly
-    ttk::combobox $connParamsLframe.peer_ip_entry -width 25 -textvariable peers_ip -state readonly
+    ttk::combobox $connParamsLframe.peer_ip_entry -width 24 -textvariable peers_ip -state readonly
+    ttk::entry $connParamsLframe.peer_ip_entry_text -width 26 -textvariable peers_ip
     grid $connParamsLframe.peer_ip -column 0 -row 5 -pady 5 -padx 5 -sticky e
     grid $connParamsLframe.peer_name_entry -column 1 -row 5 -pady 5 -padx 5 -sticky w
     grid $connParamsLframe.peer_ip_entry -column 2 -row 5 -pady 5 -padx 4 -sticky w
+    grid $connParamsLframe.peer_ip_entry_text -column 2 -row 5 -pady 5 -padx 4 -sticky w
+    grid remove $connParamsLframe.peer_ip_entry_text
 
     ttk::label $connParamsLframe.peer_sub -text "Peers subnet:"
     ttk::combobox $connParamsLframe.peer_sub_entry -width 14 -textvariable peers_subnet -state readonly
+    ttk::entry $connParamsLframe.peer_sub_entry_text -width 15 -textvariable peers_subnet
     grid $connParamsLframe.peer_sub -column 0 -row 6 -pady 5 -padx 5 -sticky e
     grid $connParamsLframe.peer_sub_entry -column 1 -row 6 -pady 5 -padx 5 -sticky w
+    grid $connParamsLframe.peer_sub_entry_text -column 1 -row 6 -pady 5 -padx 5 -sticky w
+    grid remove $connParamsLframe.peer_sub_entry_text
 
     ttk::frame $connParamsLframe.local_cert_container
     ttk::label $connParamsLframe.local_cert_container.local_cert -text "Local certificate file:"
@@ -3378,13 +3478,25 @@ proc createIPsecGUI { node mainFrame connParamsLframe espOptionsLframe ikeSALfra
 	bind $connParamsLframe.peer_ip_entry <<ComboboxSelected>> \
 	    "updatePeerSubnetCombobox $connParamsLframe"
     }
-
-    #valter - ovdje dodati double click event - vidi initGUI ili ifctree
 }
 
 # XXX
 proc updatePeerCombobox { connParamsLframe } {
     global peers_name local_ip_address local_subnet peers_ip peers_subnet
+
+    if { $peers_name == "%any" } {
+	grid remove $connParamsLframe.peer_ip_entry
+	grid remove $connParamsLframe.peer_sub_entry
+	grid $connParamsLframe.peer_ip_entry_text
+	grid $connParamsLframe.peer_sub_entry_text
+	return
+    } else {
+	grid $connParamsLframe.peer_ip_entry
+	grid $connParamsLframe.peer_sub_entry
+	grid remove $connParamsLframe.peer_ip_entry_text
+	grid remove $connParamsLframe.peer_sub_entry_text
+    }
+
     set peers_node [lindex $peers_name 2]
 
     set peerIPs [getIPAddressForPeer $peers_node $local_ip_address]
@@ -3419,6 +3531,9 @@ proc updateLocalSubnetCombobox { connParamsLframe } {
 # XXX
 proc updatePeerSubnetCombobox { connParamsLframe } {
     global local_ip_address local_subnet peers_name peers_ip peers_subnet
+    if { $peers_name == "%any" } {
+	return
+    }
     set peers_node [lindex $peers_name 2]
 
     set subnetVersion [::ip::version $local_subnet]
@@ -3477,17 +3592,26 @@ proc setDefaultsForIPsec { node connParamsLframe espOptionsLframe } {
     set local_cert_file [getNodeIPsecItem $node "local_cert_file"]
     set local_name [getNodeName $node]
 
-    set nodes [getListOfOtherNodes $node]
+    set nodes [concat %any [getListOfOtherNodes $node]]
     $connParamsLframe.peer_name_entry configure -values $nodes
 
     set localIPs [getAllIpAddresses $node]
     $connParamsLframe.local_ip_entry configure -values $localIPs
     set local_ip_address [lindex $localIPs 0]
 
+    if { "[ifcList $node]" == "" } {
+	tk_messageBox -message "Selected node does not have any interfaces!" -title "Error" -icon error -type ok
+	destroy .d
+	return
+    }
+
     set peerHasAddr 0
     set peerHasIfc 0
     foreach cnode $nodes {
 	set peers_name $cnode
+	if { $cnode == "%any"} {
+	    continue
+	}
 	set peers_node [lindex $peers_name 2]
 
 	if { $peers_name != ""} {
@@ -3631,7 +3755,7 @@ proc populateValuesForUpdate { node tab connParamsLframe espOptionsLframe } {
 	}
 
 	set nodes [getListOfOtherNodes $node]
-	$connParamsLframe.peer_name_entry configure -values $nodes
+	$connParamsLframe.peer_name_entry configure -values [concat %any $nodes]
 
 	set local_ip_address [getNodeIPsecSetting $node "configuration" "conn $selected" "left"]
 	set localIPs [getAllIpAddresses $node]
@@ -3643,24 +3767,26 @@ proc populateValuesForUpdate { node tab connParamsLframe espOptionsLframe } {
 	    }
 	}
 
-	if { $peers_name != ""} {
-	    set peers_node [getNodeFromHostname $peers_name]
-	    set peers_name "$peers_name - $peers_node"
-	    set peerIPs [getIPAddressForPeer $peers_node $local_ip_address]
-	    $connParamsLframe.peer_ip_entry configure -values $peerIPs
-	    if { [llength $peerIPs] != 0 } {
-		set peers_ip [getNodeIPsecSetting $node "configuration" "conn $selected" "right"]
-		foreach peerIp $peerIPs {
-		    if { $peers_ip == [lindex [split $peerIp /] 0]} {
-			set peers_ip $peerIp
-			break
+	if { $peers_name != "%any" } {
+	    if { $peers_name != ""} {
+		set peers_node [getNodeFromHostname $peers_name]
+		set peers_name "$peers_name - $peers_node"
+		set peerIPs [getIPAddressForPeer $peers_node $local_ip_address]
+		$connParamsLframe.peer_ip_entry configure -values $peerIPs
+		if { [llength $peerIPs] != 0 } {
+		    set peers_ip [getNodeIPsecSetting $node "configuration" "conn $selected" "right"]
+		    foreach peerIp $peerIPs {
+			if { $peers_ip == [lindex [split $peerIp /] 0]} {
+			    set peers_ip $peerIp
+			    break
+			}
 		    }
 		}
+	    } else {
+		tk_messageBox -message "Peer does not have any interfaces!" -title "Error" -icon error -type ok
+		destroy .d
+		return
 	    }
-	} else {
-	    tk_messageBox -message "Peer does not have any interfaces!" -title "Error" -icon error -type ok
-	    destroy .d
-	    return
 	}
 
 	updateLocalSubnetCombobox $connParamsLframe 
@@ -3720,6 +3846,8 @@ proc getIkeParam { ikeCfg param } {
 #   corresponding fields in the IPsec connection frame.
 #****
 proc showCertificates { lFrame } {
+    global peers_name
+
     grid forget $lFrame.shared_key
     grid forget $lFrame.shared_key_entry
 
@@ -3741,6 +3869,15 @@ proc showCertificates { lFrame } {
 
     grid $lFrame.peer_sub -column 0 -row 6 -pady 5 -padx 5 -sticky e
     grid $lFrame.peer_sub_entry -column 1 -row 6 -pady 5 -padx 5 -sticky w
+    grid $lFrame.peer_ip_entry_text -column 2 -row 5 -pady 5 -padx 2 -sticky w
+    grid $lFrame.peer_sub_entry_text -column 1 -row 6 -pady 5 -padx 5 -sticky w
+    if { $peers_name == "%any" } {
+	grid remove $lFrame.peer_ip_entry
+	grid remove $lFrame.peer_sub_entry
+    } else {
+	grid remove $lFrame.peer_ip_entry_text
+	grid remove $lFrame.peer_sub_entry_text
+    }
 
     grid $lFrame.local_cert_container -column 0 -row 7 -columnspan 3 -sticky w
 
@@ -3759,6 +3896,7 @@ proc showCertificates { lFrame } {
 #   corresponding fields in the IPsec connection frame.
 #****
 proc hideCertificates { lFrame } {
+    global peers_name
     set var_list { local_id local_id_entry peer_name peer_id local_cert_container private_file_container }
 
     foreach var $var_list {
@@ -3777,6 +3915,15 @@ proc hideCertificates { lFrame } {
 
     grid $lFrame.peer_sub -column 0 -row 4 -pady 5 -padx 5 -sticky e
     grid $lFrame.peer_sub_entry -column 1 -row 4 -pady 5 -padx 5 -sticky w
+    grid $lFrame.peer_ip_entry_text -column 2 -row 3 -pady 5 -padx 5 -sticky w
+    grid $lFrame.peer_sub_entry_text -column 1 -row 4 -pady 5 -padx 5 -sticky w
+    if { $peers_name == "%any" } {
+	grid remove $lFrame.peer_ip_entry
+	grid remove $lFrame.peer_sub_entry
+    } else {
+	grid remove $lFrame.peer_ip_entry_text
+	grid remove $lFrame.peer_sub_entry_text
+    }
 
     grid $lFrame.shared_key -column 0 -row 5 -pady 5 -padx 5 -sticky e
     grid $lFrame.shared_key_entry -column 1 -row 5 -pady 5 -padx 5 -sticky w
@@ -5064,6 +5211,9 @@ proc configGUI_showFilterIfcRuleInfo { wi phase node ifc rule } {
     #
     #shownruleframe - frame that is currently shown below the list o interfaces
     #
+    if { $badentry == -1 } {
+	return
+    }
     set shownruleframe [grid slaves $wi]
     set i [lsearch $shownruleframe "*buttons*"]
     if { $i != -1 } {
@@ -6144,28 +6294,6 @@ proc configGUI_routingProtocols { wi node } {
 	$wi.routing.protocols.ospf $wi.routing.protocols.ospf6 -side left -padx 6
     pack $wi.routing.protocols -fill both -expand 1
     pack $wi.routing -fill both
-}
-
-proc configGUI_routingModelApply { wi node } {
-    upvar 0 ::cf::[set ::curcfg]::oper_mode oper_mode
-    global ripEnable ripngEnable ospfEnable ospf6Enable
-    if { $oper_mode == "edit"} {
-	setNodeProtocolRip $node $ripEnable
-	setNodeProtocolRipng $node $ripngEnable
-	setNodeProtocolOspfv2 $node $ospfEnable
-	setNodeProtocolOspfv3 $node $ospf6Enable
-	foreach proto { rip ripng ospf ospf6 bgp } {
-	    set protocfg [netconfFetchSection $node "router $proto"]
-	    if { $protocfg != "" } {
-		set protocfg [linsert $protocfg 0 "router $proto"]
-		set protocfg [linsert $protocfg end "!"]
-		set protocfg [linsert $protocfg [lsearch $protocfg " network *"] " redistribute kernel" ]
-		netconfClearSection $node "router $proto"
-		netconfInsertSection $node $protocfg
-	    }
-	}
-	set changed 1
-    } 
 }
 
 proc configGUI_nat64Config { wi node } {

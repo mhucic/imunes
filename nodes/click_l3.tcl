@@ -74,9 +74,10 @@ proc $MODULE.confNewIfc { node ifc } {
 #****
 proc $MODULE.confNewNode { node } {
     upvar 0 ::cf::[set ::curcfg]::$node $node
+    global nodeNamingBase
 
     set nconfig [list \
-	"hostname [getNewNodeNameType click_l3 crouter]" \
+	"hostname [getNewNodeNameType click_l3 $nodeNamingBase(click_l3)]" \
 	! ]
     lappend $node "network-config [list $nconfig]"
 
@@ -153,28 +154,6 @@ proc $MODULE.notebookDimensions { wi } {
     }
 
     return [list $h $w] 
-}
-
-#****f* click_l3.tcl/click_l3.calcDxDy
-# NAME
-#   click_l3.calcDxDy -- calculate dx and dy
-# SYNOPSIS
-#   click_l3.calcDxDy
-# FUNCTION
-#   Calculates distances for nodelabels.
-# RESULT
-#   * label distance as a list {x y}
-#****
-proc $MODULE.calcDxDy {} {
-    upvar 0 ::cf::[set ::curcfg]::zoom zoom
-    global showIfIPaddrs showIfIPv6addrs
-    if { $showIfIPaddrs || $showIfIPv6addrs } {
-	set x [expr {1.1 / $zoom}]
-    } else {
-	set x [expr {1.4 / $zoom}]
-    }
-    set y [expr {1.5 / $zoom}]
-    return [list $x $y]
 }
 
 #****f* click_l3.tcl/click_l3.ifcName

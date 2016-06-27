@@ -45,9 +45,14 @@ getViStoLoc() {
     name=`getCpNodeName $1`
     dockerid=`himage -i $name`
     case $driver in
-	aufs) echo $basedir/aufs/diff/$dockerid;;
+	aufs)
+	    mount_dir=$dockerid
+	    if test "`docker --version | cut -d'.' -f2`" -ge 10; then
+		mount_dir=`cat $basedir/image/aufs/layerdb/mounts/$dockerid/mount-id`
+	    fi
+	    echo $basedir/aufs/diff/$mount_dir;;
 	btrfs) echo $basedir/btrfs/subvolumes/$dockerid;;
-	overlay) echo $basedir/overlay/$dockerid/upper;;
+	overlay) docker inspect $dockerid | grep UpperDir | awk '{print $2}' | cut -d'"' -f2;;
     esac
 }
 
@@ -117,8 +122,10 @@ copyToVi () {
     # copy file using docker
     for f in ${@:1:$n} 
     do
-        cp -r $f $docktmpdir
-        docker exec $node cp -r "$tmpdirD/`basename $f`" "/$loc"
+	if ! test "${f:0:1}" = "-"; then
+	    cp -r $f $docktmpdir
+	    docker exec $node cp -r "$tmpdirD/`basename $f`" "/$loc"
+	fi
     done
     docker exec $node rm -fr $tmpdirD
 }

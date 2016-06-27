@@ -410,9 +410,6 @@ proc setCustomConfig { node id cmd config } {
     set cfg ""
     foreach zline [split $config {
 }] {
-	if { [string index "$zline" 0] == "	" } {
-	    set zline [string replace "$zline" 0 0]
-	}
 	lappend cfg $zline
     }
     lappend customCfg2 $cfg
@@ -1583,11 +1580,16 @@ proc getNodeCoords { node } {
 proc setNodeCoords { node coords } {
     upvar 0 ::cf::[set ::curcfg]::$node $node
 
+    foreach c $coords {
+	set x [expr round($c)]
+	lappend roundcoords $x
+    }
+
     set i [lsearch [set $node] "iconcoords *"]
     if { $i >= 0 } {
-	set $node [lreplace [set $node] $i $i "iconcoords {$coords}"]
+	set $node [lreplace [set $node] $i $i "iconcoords {$roundcoords}"]
     } else {
-	set $node [linsert [set $node] end "iconcoords {$coords}"]
+	set $node [linsert [set $node] end "iconcoords {$roundcoords}"]
     }
 }
 
@@ -1623,11 +1625,16 @@ proc getNodeLabelCoords { node } {
 proc setNodeLabelCoords { node coords } {
     upvar 0 ::cf::[set ::curcfg]::$node $node
 
+    foreach c $coords {
+	set x [expr round($c)]
+	lappend roundcoords $x
+    }
+
     set i [lsearch [set $node] "labelcoords *"]
     if { $i >= 0 } {
-	set $node [lreplace [set $node] $i $i "labelcoords {$coords}"]
+	set $node [lreplace [set $node] $i $i "labelcoords {$roundcoords}"]
     } else {
-	set $node [linsert [set $node] end "labelcoords {$coords}"]
+	set $node [linsert [set $node] end "labelcoords {$roundcoords}"]
     }
 }
 
@@ -1908,7 +1915,7 @@ proc hasIPv4Addr { node } {
 
 #****f* nodecfg.tcl/hasIPv6Addr
 # NAME
-#   hasIPv4Addr -- has IPv6 address.
+#   hasIPv6Addr -- has IPv6 address.
 # SYNOPSIS
 #   set check [hasIPv6Addr $node]
 # FUNCTION
@@ -1943,6 +1950,7 @@ proc hasIPv6Addr { node } {
 proc removeNode { node } {
     upvar 0 ::cf::[set ::curcfg]::node_list node_list
     upvar 0 ::cf::[set ::curcfg]::$node $node
+    global nodeNamingBase
 
     if { [getCustomIcon $node] != "" } {
 	removeImageReference [getCustomIcon $node] $node
@@ -1955,6 +1963,11 @@ proc removeNode { node } {
     }
     set i [lsearch -exact $node_list $node]
     set node_list [lreplace $node_list $i $i]
+
+    set node_type [nodeType $node]
+    if { $node_type in [array names nodeNamingBase] } {
+	recalculateNumType $node_type $nodeNamingBase($node_type)
+    }
 }
 
 #****f* nodecfg.tcl/getNodeCanvas
@@ -2898,27 +2911,44 @@ proc getNewNodeNameType { type namebase } {
     #if the variable pcnodes isn't set we need to check through all the nodes
     #to assign a non duplicate name
     if {! [info exists num$type] } {
-	set num$type 0
-	foreach n [getAllNodesType $type] {
-	    set name [getNodeName $n]
-	    if {[string match "$namebase*" $name]} {
-		set rest [string trimleft $name $namebase]
-		if { [string is integer $rest] && $rest > [set num$type] } {
-		    set num$type $rest
-		}
-	    }
-	}
+	recalculateNumType $type $namebase
     }
 
     incr num$type
     return $namebase[set num$type]
 }
 
+#****f* nodecfg.tcl/recalculateNumType
+# NAME
+#   recalculateNumType -- recalculate number for type
+# SYNOPSIS
+#   recalculateNumType $type $namebase
+# FUNCTION
+#   Calculates largest number for the given type
+# INPUTS
+#   * type -- node type
+#   * namebase -- base for the node name
+#****
+proc recalculateNumType { type namebase } {
+    upvar 0 ::cf::[set ::curcfg]::num$type num$type
+
+    set num$type 0
+    foreach n [getAllNodesType $type] {
+	set name [getNodeName $n]
+	if {[string match "$namebase*" $name]} {
+	    set rest [string trimleft $name $namebase]
+	    if { [string is integer $rest] && $rest > [set num$type] } {
+		set num$type $rest
+	    }
+	}
+    }
+}
+
 #****f* nodecfg.tcl/transformNodes
 # NAME
 #   transformNode -- transform nodes
 # SYNOPSIS
-#   getNewNodeNameType $type $namebase
+#   transformNodes $type $namebase
 # FUNCTION
 #   Returns a new node name for the type and namebase, e.g. pc0 for pc.
 # INPUTS

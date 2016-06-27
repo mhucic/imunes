@@ -50,9 +50,10 @@ proc $MODULE.confNewIfc { node ifc } {
 
 proc $MODULE.confNewNode { node } {
     upvar 0 ::cf::[set ::curcfg]::$node $node
+    global nodeNamingBase
     
     set nconfig [list \
-	"hostname $node" \
+	"hostname [getNewNodeNameType packgen $nodeNamingBase(packgen)]" \
 	! ]
     lappend $node "network-config [list $nconfig]"
 }
@@ -81,14 +82,6 @@ proc $MODULE.notebookDimensions { wi } {
     set w 652
 		    
     return [list $h $w] 
-}
-
-
-proc $MODULE.calcDxDy {} {
-    upvar 0 ::cf::[set ::curcfg]::zoom zoom
-    set x [expr {1.4 / $zoom}]
-    set y [expr {1.5 / $zoom}]
-    return [list $x $y]
 }
 
 proc $MODULE.ifcName {l r} {

@@ -74,9 +74,10 @@ proc $MODULE.confNewIfc { node ifc } {
 #****
 proc $MODULE.confNewNode { node } {
     upvar 0 ::cf::[set ::curcfg]::$node $node
+    global nodeNamingBase
 
     set nconfig [list \
-	"hostname [getNewNodeNameType ext ext]" \
+	"hostname [getNewNodeNameType ext $nodeNamingBase(ext)]" \
 	! ]
     lappend $node "network-config [list $nconfig]"
 }
@@ -119,29 +120,7 @@ proc $MODULE.icon { size } {
 #   * descr -- string describing the toolbar icon
 #****
 proc $MODULE.toolbarIconDescr {} {
-    return "Add new External interface"
-}
-
-#****f* ext.tcl/ext.calcDxDy
-# NAME
-#   ext.calcDxDy -- calculate dx and dy
-# SYNOPSIS
-#   ext.calcDxDy
-# FUNCTION
-#   Calculates distances for nodelabels.
-# RESULT
-#   * label distance as a list {x y}
-#****
-proc $MODULE.calcDxDy {} {
-    upvar 0 ::cf::[set ::curcfg]::zoom zoom
-    global showIfIPaddrs showIfIPv6addrs
-    if { $showIfIPaddrs || $showIfIPv6addrs } {
-	set x [expr {1.1 / $zoom}]
-    } else {
-	set x [expr {1.4 / $zoom}]
-    }
-    set y [expr {1.5 / $zoom}]
-    return [list $x $y]
+    return "Add new External connection"
 }
 
 #****f* ext.tcl/ext.ifcName
@@ -192,12 +171,12 @@ proc $MODULE.layer {} {
 # SYNOPSIS
 #   set layer [ext.virtlayer]
 # FUNCTION
-#   Returns the layer on which the pc is instantiated i.e. returns VIMAGE. 
+#   Returns the layer on which the pc is instantiated i.e. returns NETGRAPH.
 # RESULT
-#   * layer -- set to VIMAGE
+#   * layer -- set to NETGRAPH
 #****
 proc $MODULE.virtlayer {} {
-    return VIMAGE
+    return NETGRAPH
 }
 
 #****f* ext.tcl/ext.shellcmds
@@ -229,7 +208,10 @@ proc $MODULE.shellcmds {} {
 #   * node -- node id (type of the node is pc)
 #****
 proc $MODULE.instantiate { eid node } {
-    createNodePhysIfcs $node
+    set ifc [lindex [ifcList $node] 0]
+    if { "$ifc" != "" } {
+	extInstantiate $node
+    }
 }
 
 #****f* ext.tcl/ext.start
@@ -245,7 +227,10 @@ proc $MODULE.instantiate { eid node } {
 #   * node -- node id (type of the node is pc)
 #****
 proc $MODULE.start { eid node } {
-    startExternalIfc $eid $node
+    set ifc [lindex [ifcList $node] 0]
+    if { "$ifc" != "" } {
+	startExternalIfc $eid $node
+    }
 }
 
 #****f* ext.tcl/ext.shutdown
@@ -261,9 +246,12 @@ proc $MODULE.start { eid node } {
 #   * node -- node id (type of the node is pc)
 #****
 proc $MODULE.shutdown { eid node } {
-    killExtProcess "wireshark.*[getNodeName $node].*\\($eid\\)"
-    killExtProcess "xterm -T Capturing $eid-$node -e tcpdump -ni $eid-$node"
-    stopExternalIfc $eid $node
+    set ifc [lindex [ifcList $node] 0]
+    if { "$ifc" != "" } {
+	killExtProcess "wireshark.*[getNodeName $node].*\\($eid\\)"
+	killExtProcess "xterm -T Capturing $eid-$node -e tcpdump -ni $eid-$node"
+	stopExternalIfc $eid $node
+    }
 }
 
 #****f* ext.tcl/ext.destroy
@@ -279,6 +267,10 @@ proc $MODULE.shutdown { eid node } {
 #   * node -- node id (type of the node is pc)
 #****
 proc $MODULE.destroy { eid node } {
+    set ifc [lindex [ifcList $node] 0]
+    if { "$ifc" != "" } {
+	destroyNetgraphNode $eid $node
+    }
 }
 
 #****f* ext.tcl/ext.nghook
@@ -316,6 +308,11 @@ proc $MODULE.nghook { eid node ifc } {
 #   * node -- node id
 #****
 proc $MODULE.configGUI { c node } {
+    set ifc [lindex [ifcList $node] 0]
+    if { "$ifc" == "" } {
+	return
+    }
+
     global wi
     global guielements treecolumns
     set guielements {}

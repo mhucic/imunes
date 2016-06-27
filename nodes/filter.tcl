@@ -50,9 +50,10 @@ proc $MODULE.confNewIfc { node ifc } {
 
 proc $MODULE.confNewNode { node } {
     upvar 0 ::cf::[set ::curcfg]::$node $node
+    global nodeNamingBase
     
     set nconfig [list \
-	"hostname $node" \
+	"hostname [getNewNodeNameType filter $nodeNamingBase(filter)]" \
 	! ]
     lappend $node "network-config [list $nconfig]"
 }
@@ -81,14 +82,6 @@ proc $MODULE.notebookDimensions { wi } {
     set w 667
 		    
     return [list $h $w] 
-}
-
-
-proc $MODULE.calcDxDy {} {
-    upvar 0 ::cf::[set ::curcfg]::zoom zoom
-    set x [expr {1.4 / $zoom}]
-    set y [expr {1.5 / $zoom}]
-    return [list $x $y]
 }
 
 proc $MODULE.ifcName {l r} {
@@ -264,6 +257,13 @@ proc $MODULE.configGUI { c node } {
     global filterguielements filtertreecolumns curnode
     set curnode $node
     set filterguielements {}
+
+    if { [ifcList $node] == "" } {
+	tk_dialog .dialog1 "IMUNES warning" \
+	    "This node has no interfaces." \
+	    info 0 Dismiss
+	return
+    }
 
     configGUI_createConfigPopupWin $c
     wm title $wi "filter configuration"

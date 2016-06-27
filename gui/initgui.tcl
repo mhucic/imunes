@@ -176,6 +176,22 @@ set iconsrcfile [lindex [glob -directory $ROOTDIR/$LIBDIR/icons/normal/ *.gif] 0
 #interface selected in the topology tree
 set selectedIfc ""
 
+# bases for naming new nodes
+array set nodeNamingBase {
+    pc pc
+    click_l2 cswitch
+    click_l3 crouter
+    ext ext
+    filter filter
+    router router
+    host host
+    hub hub
+    lanswitch switch
+    nat64 nat64-
+    packgen packgen
+    stpswitch stpswitch
+}
+
 # Packets required for GUI
 #package require Img
 
@@ -997,12 +1013,14 @@ foreach b {rectangle oval freeform text} {
     bind $mf.left.$b <Any-Leave> ".bottom.textbox config -text {}"
 }
 
-
 foreach b $all_modules_list {
-    global iconSize
     set $b [image create photo -file [$b.icon normal]]
+    set $b\_iconwidth [image width [set $b]]
+    set $b\_iconheight [image height [set $b]]
 }
 set pseudo [image create photo]
+set pseudo_iconwidth 0
+set pseudo_iconheight 0
 
 . configure -background #808080
 ttk::frame $mf.grid
@@ -1146,7 +1164,7 @@ bind . <Down> "$mf.c yview scroll 1 units"
 bind . <Up> "$mf.c yview scroll -1 units"
 
 # Escape to Select mode
-bind . <Key-Escape> "setActiveTool select"
+bind . <Key-Escape> "setActiveTool select; selectNode $c none"
 bind . <F5> "redrawAll"
 
 #

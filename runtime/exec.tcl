@@ -27,14 +27,17 @@
 #
 
 global vroot_unionfs vroot_linprocfs ifc_dad_disable regular_termination \
-    devfs_number hostsAutoAssign
+    devfs_number hostsAutoAssign linkJitterConfiguration ipsecSecrets \
+    ipsecConf ipFastForwarding
 
+set linkJitterConfiguration 0
 set vroot_unionfs 1
 set vroot_linprocfs 0
 set ifc_dad_disable 0
 set regular_termination 1
 set devfs_number 46837
 set hostsAutoAssign 0
+set ipFastForwarding 0
 
 #****f* exec.tcl/nexec
 # NAME
@@ -99,14 +102,6 @@ proc setOperMode { mode } {
     }
 
     if { !$cfgDeployed && $mode == "exec" } {
-	set err [checkSysPrerequisites]
-	if { $err != "" } {
-	    after idle {.dialog1.msg configure -wraplength 4i}
-	    tk_dialog .dialog1 "IMUNES error" \
-		"$err" \
-		info 0 Dismiss
-	    return
-	}
 	if { !$isOSlinux && !$isOSfreebsd } {
 	    after idle {.dialog1.msg configure -wraplength 4i}
 	    tk_dialog .dialog1 "IMUNES error" \
@@ -120,6 +115,14 @@ proc setOperMode { mode } {
 	    tk_dialog .dialog1 "IMUNES error" \
 		"Error: To execute experiment, run IMUNES with root permissions." \
 	    info 0 Dismiss
+	    return
+	}
+	set err [checkSysPrerequisites]
+	if { $err != "" } {
+	    after idle {.dialog1.msg configure -wraplength 4i}
+	    tk_dialog .dialog1 "IMUNES error" \
+		"$err" \
+		info 0 Dismiss
 	    return
 	}
 	if { $editor_only } {
@@ -159,15 +162,22 @@ proc setOperMode { mode } {
 	.panwin.f1.c bind node <Double-1> "spawnShellExec"
 	.panwin.f1.c bind nodelabel <Double-1> "spawnShellExec"
 	set oper_mode exec
+	wm protocol . WM_DELETE_WINDOW {
+	}
 	if {!$cfgDeployed} {
 	    deployCfg
 	    set cfgDeployed true
 	    createExperimentFiles $eid
 	}
+	wm protocol . WM_DELETE_WINDOW {
+	    exit
+	}
 	.bottom.experiment_id configure -text "Experiment ID = $eid"
     } else {
 	if {$oper_mode != "edit"} {
 	    global regular_termination
+	    wm protocol . WM_DELETE_WINDOW {
+	    }
 	    if { $regular_termination } {
 		terminateAllNodes $eid
 	    } else {
@@ -176,6 +186,9 @@ proc setOperMode { mode } {
 	    killExtProcess "socat.*$eid"
 	    set cfgDeployed false
 	    deleteExperimentFiles $eid
+	    wm protocol . WM_DELETE_WINDOW {
+		exit
+	    }
 	    .menubar.tools entryconfigure "Auto rearrange all" -state normal
 	    .menubar.tools entryconfigure "Auto rearrange selected" -state normal
 	    .menubar.tools entryconfigure "Routing protocol defaults" -state normal
@@ -247,6 +260,7 @@ proc spawnShellExec {} {
 #****
 proc fetchNodeConfiguration {} {
     upvar 0 ::cf::[set ::curcfg]::eid eid
+    global isOSfreebsd
     set ip6Set 0
     set ip4Set 0
 
@@ -255,25 +269,52 @@ proc fetchNodeConfiguration {} {
 	# XXX - here we parse ifconfig output, maybe require virtual nodes on
 	# linux to have ifconfig, or create different parsing procedures for ip
 	# and ifconfig that will have the same output
-	foreach line $lines {
-	    if {[regexp {^([[:alnum:]]+):.*mtu ([^$]+)$} $line \
-		 -> ifc mtuvalue]} {
-		setIfcMTU $node $ifc $mtuvalue
-		set ip6Set 0
-		set ip4Set 0
-	    } elseif {[regexp {^\tether ([^ ]+)} $line -> macaddr]} {
-		setIfcMACaddr $node $ifc $macaddr
-	    } elseif {[regexp {^\tinet6 (?!fe80:)([^ ]+) } $line -> ip6addr]} {
-		if {$ip6Set == 0} {
-		    setIfcIPv6addr $node $ifc $ip6addr
-		    set ip6Set 1
+	if ($isOSfreebsd) {
+	    foreach line $lines {
+		if {[regexp {^([[:alnum:]]+):.*mtu ([^$]+)$} $line \
+		     -> ifc mtuvalue]} {
+		    setIfcMTU $node $ifc $mtuvalue
+		    set ip6Set 0
+		    set ip4Set 0
+		} elseif {[regexp {^\tether ([^ ]+)} $line -> macaddr]} {
+		    setIfcMACaddr $node $ifc $macaddr
+		} elseif {[regexp {^\tinet6 (?!fe80:)([^ ]+) } $line -> ip6addr]} {
+		    if {$ip6Set == 0} {
+			setIfcIPv6addr $node $ifc $ip6addr
+			set ip6Set 1
+		    }
+		} elseif {[regexp {^\tinet ([^ ]+) netmask ([^ ]+) } $line \
+		     -> ip4addr netmask]} {
+		    if {$ip4Set == 0} {
+			set length [ip::maskToLength $netmask]
+			setIfcIPv4addr $node $ifc $ip4addr/$length
+			set ip4Set 1
+		    }
 		}
-	    } elseif {[regexp {^\tinet ([^ ]+) netmask ([^ ]+) } $line \
-		 -> ip4addr netmask]} {
-		if {$ip4Set == 0} {
-		    set length [ip::maskToLength $netmask]
-		    setIfcIPv4addr $node $ifc $ip4addr/$length
-		    set ip4Set 1
+	    }
+	} else {
+	    foreach line $lines {
+		if {[regexp {^([[:alnum:]]+)} $line -> ifc]} {
+		    set ip6Set 0
+		    set ip4Set 0
+		}
+		if {[regexp {^([[:alnum:]]+)\s.*HWaddr ([^$]+)$} $line \
+		     -> ifc macaddr]} {
+		    setIfcMACaddr $node $ifc $macaddr
+		} elseif {[regexp {^\s*inet addr:([^ ]+)\s.*\sMask:([^ ]+)} $line \
+		     -> ip4addr netmask]} {
+		    if {$ip4Set == 0} {
+			set length [ip::maskToLength $netmask]
+			setIfcIPv4addr $node $ifc $ip4addr/$length
+			set ip4Set 1
+		    }
+		} elseif {[regexp {^\s*inet6 addr:\s(?!fe80:)([^ ]+)} $line -> ip6addr]} {
+		    if {$ip6Set == 0} {
+			setIfcIPv6addr $node $ifc $ip6addr
+			set ip6Set 1
+		    }
+		} elseif {[regexp {MTU:([^ ]+)} $line -> mtuvalue]} {
+		    setIfcMTU $node $ifc $mtuvalue
 		}
 	    }
 	}
@@ -429,8 +470,13 @@ proc dumpLinksToFile { path } {
     upvar 0 ::cf::[set ::curcfg]::link_list link_list
 
     set data ""
+    set linkDelim ":"
+    set skipLinks ""
 
     foreach link $link_list {
+	if { $link in $skipLinks } {
+	    continue
+	}
 	set lnode1 [lindex [linkPeers $link] 0]
 	set lnode2 [lindex [linkPeers $link] 1]
 	set ifname1 [ifcByPeer $lnode1 $lnode2]
@@ -438,6 +484,7 @@ proc dumpLinksToFile { path } {
 
 	if { [getLinkMirror $link] != "" } {
 	    set mirror_link [getLinkMirror $link]
+	    lappend skipLinks $mirror_link
 
 	    set p_lnode2 $lnode2
 	    set lnode2 [lindex [linkPeers $mirror_link] 0]
@@ -447,10 +494,9 @@ proc dumpLinksToFile { path } {
 	set name1 [getNodeName $lnode1]
 	set name2 [getNodeName $lnode2]
 
-	set linkname "$name1-$name2"
+	set linkname "$name1$linkDelim$name2"
 
-	set line "$linkname {$lnode1-$lnode2 {{$lnode1 $ifname1} {$lnode2 $ifname2}} $link}\n"
-
+	set line "$link {$lnode1-$lnode2 {{$lnode1 $ifname1} {$lnode2 $ifname2}} $linkname}\n"
 	set data "$data$line"
     }
 
@@ -846,6 +892,10 @@ proc deployCfg {} {
 	-mode determinate -maximum $count -value $startedCount
 	pack $w.p
 	update
+
+	grab $w
+	wm protocol $w WM_DELETE_WINDOW {
+	}
     }
 
     statline "Creating nodes..."
@@ -1002,6 +1052,10 @@ proc terminateAllNodes { eid } {
 	    -mode determinate -maximum $count -value $startedCount
 	pack $w.p
 	update
+
+	grab $w
+	wm protocol $w WM_DELETE_WINDOW {
+	}
     }
 
     set t_start [clock milliseconds]
@@ -1020,9 +1074,14 @@ proc terminateAllNodes { eid } {
     # divide nodes into two lists
     set ngraphs ""
     set vimages ""
+    set extifcs ""
     foreach node $node_list {
 	if { [[typemodel $node].virtlayer] == "NETGRAPH" } {
-	    lappend ngraphs $node
+	    if { [typemodel $node] == "rj45" } {
+		lappend extifcs $node
+	    } else {
+		lappend ngraphs $node
+	    }
 	} elseif { [[typemodel $node].virtlayer] == "VIMAGE" } {
 	    lappend vimages $node
 	}
@@ -1050,6 +1109,9 @@ proc terminateAllNodes { eid } {
     # Stop services on the LINKDEST hook
     services stop "LINKDEST"
 
+    # release external interfaces
+    destroyNetgraphNodes $eid $extifcs $w
+
     # destroying links
     statline "Destroying links..."
     pipesCreate
@@ -1072,6 +1134,7 @@ proc terminateAllNodes { eid } {
     statline ""
 
     destroyNetgraphNodes $eid $ngraphs $w
+    incr startedCount [expr -[llength $ngraphs]]
 
     destroyVirtNodeIfcs $eid $vimages
 
@@ -1237,29 +1300,23 @@ proc pipesClose { } {
 # NAME
 #   l3node.ipsecInit -- IPsec initialization
 # SYNOPSIS
-#   l3node.ipsecInit $eid $node
+#   l3node.ipsecInit $node
 # FUNCTION
 #   Creates ipsec.conf and ipsec.secrets files from IPsec configuration of given node
 #   and copies certificates to desired folders (if there are any certificates)
 # INPUTS
-#   * eid -- experiment id
 #   * node -- node id
 #****
-proc l3node.ipsecInit { eid node } {
-    set node_id "$eid\.$node"
-
-    #ne zvati genericki jer ne znam sta to radi
-    set fileId [open /tmp/imunes_$node_id\_ipsec.conf w]
-    set fileId2 [open /tmp/imunes_$node_id\_ipsec.secrets w]
+set ipsecConf ""
+set ipsecSecrets ""
+proc l3node.ipsecInit { node } {
+    global ipsecConf ipsecSecrets isOSfreebsd
 
     set config_content [getNodeIPsec $node]
     if { $config_content != "" } {
 	setNodeIPsecSetting $node "configuration" "conn %default" "keyexchange" "ikev2"
-	puts $fileId "# /etc/ipsec.conf - strongSwan IPsec configuration file"
-	puts -nonewline $fileId "\n"
+	set ipsecConf "# /etc/ipsec.conf - strongSwan IPsec configuration file\n"
     } else {
-	exec rm -fr /tmp/imunes_$node_id\_ipsec.conf
-	exec rm -fr /tmp/imunes_$node_id\_ipsec.secrets
 	return
     }
 
@@ -1268,7 +1325,7 @@ proc l3node.ipsecInit { eid node } {
     foreach item $config_content {
 	set element [lindex $item 0]
 	set settings [lindex $item 1]
-	puts $fileId "$element"
+	set ipsecConf "$ipsecConf$element\n"
 	set hasKey 0
 	set hasRight 0
 	foreach setting $settings {
@@ -1284,42 +1341,37 @@ proc l3node.ipsecInit { eid node } {
 		set hasRight 1
 		set right [lindex [split $setting =] 1]
 	    }
-	    puts $fileId "        $setting"
+	    set ipsecConf "$ipsecConf        $setting\n"
 	}
 	if { $hasKey && $hasRight } {
-	    puts $fileId2 "$right : PSK $psk_key"
+	    set ipsecSecrets "$right : PSK $psk_key"
 	}
     }
 
     delNodeIPsecElement $node "configuration" "conn %default"
 
-    close $fileId
-    close $fileId2
-
     set local_cert [getNodeIPsecItem $node "local_cert"]
     set ipsecret_file [getNodeIPsecItem $node "local_key_file"]
-    ipsecFilesToNode $eid $node $local_cert $ipsecret_file
+    ipsecFilesToNode $node $local_cert $ipsecret_file
 
-    exec rm -fr /tmp/imunes_$node_id\_ipsec.conf
-    exec rm -fr /tmp/imunes_$node_id\_ipsec.secrets
-}
+    set ipsec_log_level [getNodeIPsecItem $node "ipsec-logging"]
+    if { $ipsec_log_level != "" } {
+	execCmdNode $node "touch /tmp/charon.log"
+	set charon "charon {\n\
+	\tfilelog {\n\
+	\t\t/tmp/charon.log {\n\
+	\t\t\tappend = yes\n\
+	\t\t\tflush_line = yes\n\
+	\t\t\tdefault = $ipsec_log_level\n\
+	\t\t}\n\
+	\t}\n\
+	}"
 
-#****f* exec.tcl/l3node.ipsecStart
-# NAME
-#   l3node.ipsecStart -- IPsec launch
-# SYNOPSIS
-#   l3node.ipsecStart $eid $node
-# FUNCTION
-#   Starts Strongswan daemon
-# INPUTS
-#   * eid -- experiment id
-#   * node -- node id
-#****
-proc l3node.ipsecStart { eid node } {
-    set config_content [getNodeIPsec $node]
-
-    if { [llength $config_content] > 0 } {
-	startIPsecOnNode $eid $node
+	set prefix ""
+	if { $isOSfreebsd } {
+	    set prefix "/usr/local"
+	}
+	writeDataToNodeFile $node "$prefix/etc/strongswan.d/charon-logging.conf" $charon
     }
 }
 
@@ -1363,5 +1415,31 @@ proc generateHostsFile { node } {
 	    }
 	    writeDataToNodeFile $node /etc/hosts $etchosts
 	}
+    }
+}
+
+#****f* exec.tcl/captureOnExtIfc
+# NAME
+#   captureOnExtIfc -- start wireshark on an interface
+# SYNOPSIS
+#   captureOnExtIfc $node $command
+# FUNCTION
+#   Start tcpdump or Wireshark on the specified external interface.
+# INPUTS
+#   * node -- node id
+#   * command -- tcpdump or wireshark
+#****
+proc captureOnExtIfc { node command } {
+    set ifc [lindex [ifcList $node] 0]
+    if { "$ifc" == "" } {
+	return
+    }
+
+    upvar 0 ::cf::[set ::curcfg]::eid eid
+
+    if { $command == "tcpdump" } {
+	exec xterm -T "Capturing $eid-$node" -e "tcpdump -ni $eid-$node" 2> /dev/null &
+    } else {
+	exec $command -o "gui.window_title:[getNodeName $node] ($eid)" -k -i $eid-$node 2> /dev/null &
     }
 }

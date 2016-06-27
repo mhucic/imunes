@@ -109,7 +109,7 @@ proc dumpCfg { method dest } {
 		dumpputs $method $dest "    ipsec-config \{"
 		foreach line [lindex $element 1] {
 		    set header [lindex $line 0]
-		    if { $header == "local_cert" || $header == "local_key_file" } {
+		    if { $header == "local_cert" || $header == "local_key_file" || $header == "ipsec-logging"} {
 			dumpputs $method $dest "        $line"
 		    } elseif { $header == "configuration" } {
 			dumpputs $method $dest "        configuration \{"
@@ -150,9 +150,7 @@ proc dumpCfg { method dest } {
 			    dumpputs $method $dest "            [lrange [lindex $line $x+2] 0 1]"
 			    dumpputs $method $dest "            [lindex [lindex $line $x+2] 2] \{"
 			    foreach l [lindex [lindex $line $x+2] 3] {
-				if { $l != {} } {
-				    dumpputs $method $dest "                $l"
-				}
+				dumpputs $method $dest "                $l"
 			    }
 			    dumpputs $method $dest "            \}"
 			    dumpputs $method $dest "        \}"
@@ -200,6 +198,8 @@ proc dumpCfg { method dest } {
     }
 
     dumpputs $method $dest "option show \{"
+
+    # XXX - this needs to be refactored.
     if {$showIfNames == 0} { 
 	dumpputs $method $dest "    interface_names no" 
     } else {
@@ -283,6 +283,7 @@ proc loadCfg { cfg } {
     global showBkgImage showGrid showAnnotations
     global iconSize
     global hostsAutoAssign
+    global execMode all_modules_list
 
     # Cleanup first
     set node_list {}
@@ -378,6 +379,8 @@ proc loadCfg { cfg } {
 				set zline [string trimleft "$zline"]
 				if { [string first "local_cert" $zline] != -1 || [string first "local_key_file" $zline] != -1 } {
 				    lappend cfg $zline
+				} elseif { [string first "ipsec-logging" $zline] != -1 } {
+				    lappend cfg "$zline"
 				} elseif { [string first "configuration" $zline] != -1 } {
 				    set conf_indicator 1
 				} elseif { [string first "\}" $zline] != -1 } {
@@ -445,17 +448,17 @@ proc loadCfg { cfg } {
 				set empty 0
 				set config_split [split $config {
 }]
-				set line1 [lindex $config_split 1]
+				set config_split [lrange $config_split 1 end-1]
+				set line1 [lindex $config_split 0]
 				set empty [expr {[string length $line1]-\
 				    [string length [string trimleft $line1]]}]
+				set empty_str [string repeat " " $empty]
 				foreach zline $config_split {
-				    if { [string index "$zline" 0] == "	" } {
-					set zline [string replace "$zline" 0 0]
+				    while { [string range $zline 0 $empty-1] != "$empty_str" } {
+					set zline [regsub {\t} $zline "        "]
 				    }
 				    set zline [string range $zline $empty end]
-				    if { $zline != "" } {
-					lappend cfg $zline
-				    }
+				    lappend cfg $zline
 				}
 				set cfg_pconf [lreplace [lindex $value $x+2] 3 3 $cfg]
 				set cfg [lreplace [lrange $value $x $x+2] 2 2 $cfg_pconf]
@@ -718,6 +721,19 @@ proc loadCfg { cfg } {
     set IPv4UsedList ""
     set MACUsedList ""
     foreach node $node_list {
+	set nodeType [typemodel $node]
+	if { $nodeType ni [concat $all_modules_list "pseudo"] && \
+	    ! [string match "router.*" $nodeType] } {
+	    set msg "Unknown node type: '$nodeType'."
+	    if { $execMode == "batch" } {
+		statline $msg
+	    } else {
+		tk_dialog .dialog1 "IMUNES warning" \
+		    "Error: $msg" \
+		info 0 Dismiss
+	    }
+	    exit
+	}
 	if { "lo0" ni [logIfcList $node] && \
 		[[typemodel $node].layer] == "NETWORK"} {
 	    setLogIfcType $node lo0 lo

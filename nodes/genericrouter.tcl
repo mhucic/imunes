@@ -81,6 +81,7 @@ proc $MODULE.confNewNode { node } {
     global ripEnable ripngEnable ospfEnable ospf6Enable
     global rdconfig router_model router_ConfigModel
     global def_router_model 
+    global nodeNamingBase
 
     set ripEnable [lindex $rdconfig 0]
     set ripngEnable [lindex $rdconfig 1]
@@ -95,7 +96,7 @@ proc $MODULE.confNewNode { node } {
     }
 
     set nconfig [list \
-	"hostname [getNewNodeNameType router router]" \
+	"hostname [getNewNodeNameType router $nodeNamingBase(router)]" \
 	! ]
     lappend $node "network-config [list $nconfig]"
     
@@ -182,23 +183,6 @@ proc $MODULE.notebookDimensions { wi } {
     }
 
     return [list $h $w] 
-}
-
-#****f* genericrouter.tcl/router.calcDxDy
-# NAME
-#   router.calcDxDy -- calculate dx and dy
-# SYNOPSIS
-#   router.calcDxDy
-# FUNCTION
-#   Calculates distances for nodelabels.
-# RESULT
-#   * label distance as a list {x y}
-#****
-proc $MODULE.calcDxDy {} {
-    upvar 0 ::cf::[set ::curcfg]::zoom zoom
-    set x [expr {1 / $zoom}]
-    set y [expr {2 / $zoom}]
-    return [list $x $y]
 }
 
 #****f* genericrouter.tcl/router.ifcName

@@ -126,8 +126,6 @@ proc splitGUILink { link } {
     setLinkMirror $new_link2 $new_link1
     setNodeMirror $new_node1 $new_node2
     setNodeMirror $new_node2 $new_node1
-    setNodeName $new_node1 $orig_node2
-    setNodeName $new_node2 $orig_node1
 
     set x1 [lindex [getNodeCoords $orig_node1] 0]
     set y1 [lindex [getNodeCoords $orig_node1] 1]
@@ -161,6 +159,11 @@ proc splitGUILink { link } {
 #   * obj -- tk canvas object tag id
 #****
 proc selectNode { c obj } {
+    if { $obj == "none" } {
+	$c delete -withtags "selectmark"
+	return
+    }
+
     set node [lindex [$c gettags $obj] 1]
 
     if { $node == "" } {
@@ -183,6 +186,9 @@ proc selectNode { c obj } {
 	set bbox [$c bbox "freeform && $node"]
     } else {
 	set bbox [$c bbox "node && $node"]
+    }
+    if { $bbox == "" } {
+	return
     }
     set bx1 [expr {[lindex $bbox 0] - 2}]
     set by1 [expr {[lindex $bbox 1] - 2}]
@@ -514,7 +520,6 @@ proc button3node { c x y } {
     upvar 0 ::cf::[set ::curcfg]::eid eid
 
     set node [lindex [$c gettags {node && current}] 1]
-    set type [nodeType $node]
 
     if { $node == "" } {
 	set node [lindex [$c gettags {nodelabel && current}] 1]
@@ -522,6 +527,8 @@ proc button3node { c x y } {
 	    return
 	}
     }
+
+    set type [nodeType $node]
     set mirror_node [getNodeMirror $node]
 
     if { [$c gettags "node && $node && selected"] == "" } {
@@ -692,6 +699,9 @@ proc button3node { c x y } {
 	    -command "startNodeFromMenu $node"
 	.button3menu add command -label Stop \
 	    -command "stopNodeFromMenu $node" 
+	.button3menu add command -label Restart \
+	    -command "stopNodeFromMenu $node; \
+	     startNodeFromMenu $node" 
     } else {
 #	.button3menu add command -label Start \
 #	    -command "[typemodel $node].start $eid $node" -state disabled
@@ -1033,9 +1043,8 @@ proc button1 { c x y button } {
 	    setNodeCoords $node "[expr {$x / $zoom}] [expr {$y / $zoom}]"
 	    # To calculate label distance we take into account the normal icon
 	    # height
-	    set tempimg [image create photo -file [$activetool.icon normal]]
-	    set dy [expr [image height $tempimg]/2 + 16]
-	    image delete $tempimg
+	    global $activetool\_iconheight
+	    set dy [expr [set $activetool\_iconheight]/2 + 11]
 	    setNodeLabelCoords $node "[expr {$x / $zoom}] \
 		[expr {$y / $zoom + $dy}]"
 	    drawNode $node

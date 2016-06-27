@@ -127,18 +127,23 @@ proc startWiresharkOnNodeIfc { node ifc } {
     }
 }
 
-#****f* freebsd.tcl/startWiresharkOnExtIfc
+#****f* freebsd.tcl/captureOnExtIfc
 # NAME
-#   startWiresharkOnExtIfc -- start wireshark on an interface
+#   captureOnExtIfc -- start wireshark on an interface
 # SYNOPSIS
-#   startWiresharkOnExtIfc $node $ifc
+#   captureOnExtIfc $node $command
 # FUNCTION
-#   Start Wireshark on a virtual node on the specified interface.
+#   Start tcpdump or Wireshark on the specified external interface.
 # INPUTS
-#   * node -- virtual node id
-#   * ifc -- virtual node interface
+#   * node -- node id
+#   * command -- tcpdump or wireshark
 #****
 proc captureOnExtIfc { node command } {
+    set ifc [lindex [ifcList $node] 0]
+    if { "$ifc" == "" } {
+	return
+    }
+
     upvar 0 ::cf::[set ::curcfg]::eid eid
 
     if { $command == "tcpdump" } {
@@ -552,6 +557,16 @@ proc execSetLinkParams { eid link } {
 
     set lnode1 [lindex [linkPeers $link] 0]
     set lnode2 [lindex [linkPeers $link] 1]
+
+    if { [getLinkMirror $link] != "" } {
+	set mirror_link [getLinkMirror $link]
+	if { [nodeType $lnode1] == "pseudo" } {
+	    set lnode1 [lindex [linkPeers $mirror_link] 0]
+	} else {
+	    set lnode2 [lindex [linkPeers $mirror_link] 0]
+	}
+    }
+
     set lname $lnode1-$lnode2
 
     set bandwidth [expr [getLinkBandwidth $link] + 0]
@@ -728,6 +743,10 @@ proc vimageCleanup { eid } {
 	-mode determinate -maximum $count -value $count
 	pack $w.p
 	update
+
+	grab $w
+	wm protocol $w WM_DELETE_WINDOW {
+	}
     }
 
     statline "Terminating experiment with experiment id: $eid."
@@ -921,7 +940,7 @@ proc vimageCleanup { eid } {
 #   * regex -- regularl expression of the processes
 #****
 proc killExtProcess { regex } {
-    catch "exec pkill -f $regex"
+    catch "exec pkill -f \"$regex\""
 }
 
 #****f* freebsd.tcl/getRunningNodeIfcList
@@ -1286,43 +1305,6 @@ proc startIfcsNode { node } {
 	}
     }
     exec sh << $cmds
-}
-
-proc startExternalIfc { eid node } {
-    upvar 0 ::cf::[set ::curcfg]::ngnodemap ngnodemap
-
-    set cmds ""
-    set ifc [lindex [ifcList $node] 0]
-    set outifc "$eid-$node"
-
-    set ether [getIfcMACaddr $node $ifc]
-    if {$ether == ""} {
-	autoMACaddr $node $ifc
-    }
-    set ether [getIfcMACaddr $node $ifc]
-    set cmds "ifconfig $outifc link $ether"
-
-    set ipv4 [getIfcIPv4addr $node $ifc]
-    if {$ipv4 == ""} {
-	autoIPv4addr $node $ifc
-    }
-    set ipv4 [getIfcIPv4addr $node $ifc]
-    set cmds "$cmds\n ifconfig $outifc $ipv4"
-
-    set ipv6 [getIfcIPv6addr $node $ifc]
-    if {$ipv6 == ""} {
-	autoIPv6addr $node $ifc
-    }
-    set ipv6 [getIfcIPv6addr $node $ifc]
-    set cmds "$cmds\n ifconfig $outifc inet6 $ipv6"
-
-    set cmds "$cmds\n ifconfig $outifc up"
-
-    exec sh << $cmds &
-}
-
-proc stopExternalIfc { eid node } {
-    exec ifconfig $eid-$node down
 }
 
 #****f* freebsd.tcl/runConfOnNode
@@ -1737,6 +1719,10 @@ proc destroyLinkBetween { eid lnode1 lnode2 } {
     pipesExec "jexec $eid ngctl msg $lnode1-$lnode2: shutdown"
 }
 
+#dummy procedure
+proc destroyNetgraphNode { eid node } {
+}
+
 #****f* freebsd.tcl/destroyNetgraphNodes
 # NAME
 #   destroyNetgraphNodes -- destroy netgraph nodes
@@ -1923,6 +1909,7 @@ proc captureExtIfc { eid node } {
     set ifname [getNodeName $node]
     if { [getEtherVlanEnabled $node] && [getEtherVlanTag $node] != "" } {
 	exec ifconfig $ifname create
+	exec ifconfig [lindex [split $ifname .] 0] up promisc
     }
     set ngifname [string map {. _} $ifname]
     set ngnodemap($ifname) $ngifname
@@ -1943,10 +1930,10 @@ proc captureExtIfc { eid node } {
 #****
 proc releaseExtIfc { eid node } {
     set ifname [getNodeName $node]
-    nexec ifconfig $ifname -vnet $eid
-    nexec ifconfig $ifname up -promisc
+    catch {nexec ifconfig $ifname -vnet $eid}
+    catch {nexec ifconfig $ifname up -promisc}
     if { [getEtherVlanEnabled $node] && [getEtherVlanTag $node] != "" } {
-	exec ifconfig $ifname destroy
+	catch {exec ifconfig $ifname destroy}
     }
 }
 
@@ -1962,7 +1949,11 @@ proc releaseExtIfc { eid node } {
 #   * node -- node id
 #****
 proc enableIPforwarding { eid node } {
+    global ipFastForwarding
     pipesExec "jexec $eid\.$node sysctl net.inet.ip.forwarding=1" "hold"
+    if {$ipFastForwarding} {
+	pipesExec "jexec $eid\.$node sysctl net.inet.ip.fastforwarding=1" "hold"
+    }
     pipesExec "jexec $eid\.$node sysctl net.inet6.ip6.forwarding=1" "hold"
 }
 
@@ -2029,38 +2020,29 @@ proc checkSysPrerequisites {} {
     # jail, jexec, jls, ngctl
 }
 
-#****f* freebsd.tcl/startIPsecOnNode
-# NAME
-#   startIPsecOnNode -- start ipsec on node
-# SYNOPSIS
-#   startIPsecOnNode $eid $node
-# FUNCTION
-#   Starts strongswan ipsec daemons on the given node.
-#****
-proc startIPsecOnNode { eid node } {
-    catch "exec jexec $eid\.$node ipsec start"
-}
-
-proc ipsecFilesToNode { eid node local_cert ipsecret_file } {
-    set node_id "$eid\.$node"
-    set hostname [getNodeName $node]
+proc ipsecFilesToNode { node local_cert ipsecret_file } {
+    global ipsecConf ipsecSecrets
 
     if { $local_cert != "" } {
 	set trimmed_local_cert [lindex [split $local_cert /] end]
-	catch {exec hcp $local_cert $hostname@$eid:/usr/local/etc/ipsec.d/certs/$trimmed_local_cert}
+	set fileId [open $trimmed_local_cert "r"]
+	set trimmed_local_cert_data [read $fileId]
+	writeDataToNodeFile $node /usr/local/etc/ipsec.d/certs/$trimmed_local_cert $trimmed_local_cert_data
+	close $fileId
     }
 
     if { $ipsecret_file != "" } {
-	set fileId2 [open /tmp/imunes_$node_id\_ipsec.secrets w]
-	puts $fileId2 "# /etc/ipsec.secrets - strongSwan IPsec secrets file\n"
 	set trimmed_local_key [lindex [split $ipsecret_file /] end]
-	catch {exec hcp $ipsecret_file $hostname@$eid:/usr/local/etc/ipsec.d/private/$trimmed_local_key}
-	puts $fileId2 ": RSA $trimmed_local_key"
-	close $fileId2
+	set fileId [open $trimmed_local_key "r"]
+	set trimmed_local_key_data "# /etc/ipsec.secrets - strongSwan IPsec secrets file\n"
+	set trimmed_local_key_data "$trimmed_local_key_data[read $fileId]\n"
+	set trimmed_local_key_data "$trimmed_local_key_data: RSA $trimmed_local_key"
+	writeDataToNodeFile $node /usr/local/etc/ipsec.d/private/$trimmed_local_key $trimmed_local_key_data
+	close $fileId
     }
 
-    catch {exec hcp /tmp/imunes_$node_id\_ipsec.conf $hostname@$eid:/usr/local/etc/ipsec.conf}
-    catch {exec hcp /tmp/imunes_$node_id\_ipsec.secrets $hostname@$eid:/usr/local/etc/ipsec.secrets}
+    writeDataToNodeFile $node /usr/local/etc/ipsec.conf $ipsecConf
+    writeDataToNodeFile $node /usr/local/etc/ipsec.secrets $ipsecSecrets
 }
 
 proc sshServiceStartCmds {} {
@@ -2073,4 +2055,61 @@ proc sshServiceStopCmds {} {
 
 proc inetdServiceRestartCmds {} {
     return "service inetd onerestart"
+}
+
+# XXX NAT64 procedures
+proc createStartTunIfc { eid node } {
+    # create and start tun interface and return its name
+    catch {exec jexec $eid.$node ifconfig tun create} tun
+    exec jexec $eid.$node ifconfig $tun up
+
+    return $tun
+}
+
+proc prepareTaygaConf { eid node data datadir } {
+    exec jexec $eid.$node mkdir -p $datadir
+    writeDataToNodeFile $node "/usr/local/etc/tayga.conf" $data
+}
+
+proc taygaShutdown { eid node } {
+    catch "exec jexec $eid.$node killall -9 tayga"
+    exec jexec $eid.$node rm -rf /var/db/tayga
+}
+
+proc taygaDestroy { eid node } {
+    global nat64ifc_$eid.$node
+    catch {exec jexec $eid.$node ifconfig [set nat64ifc_$eid.$node] destroy}
+}
+
+# XXX External connection procedures
+proc extInstantiate { node } {
+    createNodePhysIfcs $node
+}
+
+proc startExternalIfc { eid node } {
+    set cmds ""
+    set ifc [lindex [ifcList $node] 0]
+    set outifc "$eid-$node"
+
+    set ipv4 [getIfcIPv4addr $node $ifc]
+    if {$ipv4 == ""} {
+	autoIPv4addr $node $ifc
+    }
+    set ipv4 [getIfcIPv4addr $node $ifc]
+    set cmds "ifconfig $outifc $ipv4"
+
+    set ipv6 [getIfcIPv6addr $node $ifc]
+    if {$ipv6 == ""} {
+	autoIPv6addr $node $ifc
+    }
+    set ipv6 [getIfcIPv6addr $node $ifc]
+    set cmds "$cmds\n ifconfig $outifc inet6 $ipv6"
+
+    set cmds "$cmds\n ifconfig $outifc up"
+
+    exec sh << $cmds &
+}
+
+proc stopExternalIfc { eid node } {
+    exec ifconfig $eid-$node down
 }
