@@ -232,12 +232,13 @@ proc createNode { type } {
         }
 
     } elseif {$type == "router"} {
-        puts "Choose router type:"
+        puts "Choose router model:"
         set i 0
         foreach rtype $supp_router_models {
             puts "$i) $rtype"
             incr i
         }
+        puts "Enter number in front of model:"
         set input [gets stdin]
         if {$input>-1 && $input<$i} {
 			set node [newNode "router"]
@@ -359,26 +360,26 @@ proc createLink { node1 ifc1 node2 ifc2 } {
     upvar 0 ::cf::[set ::curcfg]::node_list node_list
     upvar 0 ::cf::[set ::curcfg]::eid eid
 
-    if {[nodeType $node1] == "pseudo" || [nodeType $node2] == "pseudo"}    {
-        puts "Can't create link to \"pseudo nodes\""
-        return
-    }
-
     if {[lsearch -exact $node_list $node1]<0} {
         puts "Node $node1 doesn't exist. Choose another node."
         return
-    } elseif {[lsearch -exact $node_list $node2]<0} {
+    }
+    if {[lsearch -exact $node_list $node2]<0} {
         puts "Node $node2 doesn't exist. Choose another node."
         return
     }
     if {[lsearch -exact [ifcList $node1] $ifc1]<0 } {
         puts "Interface $ifc1 on $node1 doesn't exist. Please choose another or create one."
         return
-    } elseif {[lsearch -exact [ifcList $node2] $ifc2]<0} {
+    } 
+    if {[lsearch -exact [ifcList $node2] $ifc2]<0} {
         puts "Interface $ifc2 on $node2 doesn't exist. Please choose another or create one."
         return
     }
-
+	if {[nodeType $node1] == "pseudo" || [nodeType $node2] == "pseudo"}    {
+        puts "Can't create link to \"pseudo nodes\""
+        return
+    }
     #Check if interface is used by another link
     if {[peerByIfc $node1 $ifc1]!=$node1} {
         puts "Interface $ifc1 on $node1 is used and connected to node [peerByIfc $node1 $ifc1]." 
@@ -736,7 +737,7 @@ proc deleteNodeIfc {node ifcname} {
 	set i [lsearch [set $node] "interface-peer {$ifcname $node}"]
 	set $node [lreplace [set $node] $i $i]
 	
-	set index [lsearch -exact $MACUsedList [getIfcMACaddr $node $ifc]]
+	set index [lsearch -exact $MACUsedList [getIfcMACaddr $node $ifcname]]
     set MACUsedList [lreplace $MACUsedList $index $index]
 
 	global autoSaveOnChange
@@ -924,10 +925,19 @@ proc startConfiguration {} {
 #    * eidInput -- eid of running experiment
 #****
 proc attachToRunningExperiment { eidInput } {
-    global runtimeDir
-	upvar 0 ::cf::[set ::curcfg]::eid eid
+    upvar 0 ::cf::[set ::curcfg]::eid eid
 	upvar 0 ::cf::[set ::curcfg]::ngnodemap ngnodemap
-
+	global runtimeDir
+	
+	set experiments [getResumableExperiments]
+	
+	if {[lsearch -exact $experiments $eidInput]<0} {
+        puts "Experiment $eidInput doesn't exist! Choose another one:"
+        puts ""
+        printResumableExperiments
+        return
+    }
+	
 	set eid $eidInput
 
 	set fileId [open $runtimeDir/$eid/config.imn r]
