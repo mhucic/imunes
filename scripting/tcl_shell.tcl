@@ -35,10 +35,10 @@ set procedures [lsort $procedures]
 #   Returns longest match and matched procedures that can be
 #	completed from input string
 # INPUTS
-#   * word -- string that needs to be autocompleted
+#   * word  -- string that needs to be autocompleted
 #	* start -- start position of word in line
-#	* end -- end position of word in line
-#	* line -- line text
+#	* end   -- end position of word in line
+#	* line  -- line text
 # RESULT
 #	* Completed longest match of matched procedures and 
 #	  list of matched procedures

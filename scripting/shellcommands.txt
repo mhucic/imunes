@@ -4,6 +4,7 @@ setNodeName
 getNodeName
 createContainer 
 saveConfiguration
+deleteLinkWithIfcs
 deleteLink
 deleteNode
 printNodeList	
@@ -21,4 +22,5 @@ demo1
 createNodeIfc
 deleteNodeIfc
 createLinkNewIfcs
-deleteLink2
+
+
